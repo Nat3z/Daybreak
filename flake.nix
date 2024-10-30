@@ -34,7 +34,7 @@
               modules = [
                 {
                   # https://devenv.sh/reference/options/
-                  packages = with pkgs; [ protobuf ];
+                  packages = with pkgs; [ protobuf  openssl ];
                   languages.rust = {
                     enable = true;
                     # https://devenv.sh/reference/options/#languagesrustchannel

@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 protobuf = "3"
 signal-hook = "0.3.17"
+ssh2 = "0.9"
+linked-hash-map = "0.5.6"
 
 [build-dependencies]
 protobuf-codegen = "3"

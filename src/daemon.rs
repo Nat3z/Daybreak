@@ -1,7 +1,9 @@
 
 pub mod daemonhandler {
-    use std::{borrow::BorrowMut, io::{Read, Write}, os::unix::net::UnixListener, process::exit};
+    use std::{borrow::BorrowMut, io::{Read, Write}, os::unix::net::UnixListener, path::Path, process::exit};
     use super::super::robot::robotmanager;
+    use ssh2::Session;
+
     pub enum MsgDaemonType {
         Upload = 1,
         Connect = 2,
@@ -74,7 +76,7 @@ pub mod daemonhandler {
                             let _dawn_read = socket.read(&mut buffer);
                             if _dawn_read.is_err() {
                                 println!("[Daemon] Failed to read from socket.");
-                                exit(1);
+                                return;
                             }
 
                             // read the cwd
@@ -84,6 +86,7 @@ pub mod daemonhandler {
 
                             let cwd = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[0];
                             let file_path = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[1];
+                            let ipaddr = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[2];
                             println!("[Daemon @Upload] Received file path: {:?}", file_path);
                             println!("[Daemon @Upload] CWD: {:?}", cwd);
 
@@ -101,6 +104,62 @@ pub mod daemonhandler {
                             // if the file exists and was sent, send a 200
                             let _ = socket.write(&[200]);
                             let _ = socket.flush();
+                            // connect over ssh
+                            let tcp = std::net::TcpStream::connect(format!("{}:22", ipaddr.trim()));
+                            if tcp.is_err() {
+                                println!("[Daemon @Upload] Failed to connect to IP address.");
+                                let _ = socket.write(&[101]);
+                                let _ = socket.flush();
+                                continue;
+                            }
+                            let tcp = tcp.unwrap();
+                            let mut sess = Session::new().unwrap();
+                            sess.set_tcp_stream(tcp);
+                            sess.handshake().unwrap();
+                            let worked = sess.userauth_password("pi", "raspberry");
+                            if worked.is_err() {
+                                println!("[Daemon @Upload] Failed to authenticate.");
+                                let _ = socket.write(&[101]);
+                                let _ = socket.flush();
+                                continue;
+                            }
+                            let mut remote_file = sess.scp_send(Path::new("/home/pi/runtime/executor/student_code.py"), 0o644, file_path.metadata().unwrap().len(), None);
+                            if remote_file.is_err() {
+                                println!("[Daemon @Upload] Failed to send file.");
+                                let _ = socket.write(&[100]);
+                                let _ = socket.flush();
+                                continue;
+                            }
+                            let mut remote_file = remote_file.unwrap();
+                            let mut file = std::fs::File::open(file_path);
+                            if file.is_err() {
+                                println!("[Daemon @Upload] Failed to open local file.");
+                                let _ = socket.write(&[103]);
+                                let _ = socket.flush();
+                                continue;
+                            }
+
+                            let mut file = file.unwrap();
+                            let mut buffer = [0; 1024];
+                            loop {
+                                let read = file.read(&mut buffer);
+                                if read.is_err() {
+                                    println!("[Daemon @Upload] Failed to read from file.");
+                                    exit(1);
+                                }
+                                let read = read.unwrap();
+                                if read == 0 {
+                                    break;
+                                }
+                                let _ = remote_file.write(&buffer[..read]);
+                            }
+                            let _ = remote_file.send_eof();
+                            let _ = remote_file.wait_eof();
+                            let _ = remote_file.wait_close();
+
+                            let _ = socket.write(&[200]);
+                            let _ = socket.flush();
+                            // completed upload.
                         },
                         _ => {
                             println!("[Daemon] Unknown message type: {:?}", buffer[0]);
