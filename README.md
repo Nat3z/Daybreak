@@ -14,6 +14,6 @@ With this system, it allows for persistent connections to the Robot.
 - [ ] Support the full Dawn Networking Stack
 - [ ] Modularity
 - [ ] Support Input Methods
-- [ ] Upload code command
+- [x] Upload code command
 - [ ] Development tools + LSP support
 - [ ] Run/Stop State Support

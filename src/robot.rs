@@ -73,7 +73,7 @@ pub mod robotmanager {
 
         }
 
-}
+    }
     pub fn connect(default_host: &str) -> u8 {
         let default_port = 8101;
         

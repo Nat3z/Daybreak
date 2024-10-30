@@ -160,6 +160,7 @@ pub mod daemonhandler {
                             let _ = socket.write(&[200]);
                             let _ = socket.flush();
                             // completed upload.
+                            println!("[Daemon @Upload] File has been uploaded.");
                         },
                         _ => {
                             println!("[Daemon] Unknown message type: {:?}", buffer[0]);

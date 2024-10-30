@@ -152,6 +152,7 @@ fn main() {
 
             let ipaddr = args[2].as_str();
             let _ = stream.write(&[1]);
+
             // write the current working directory
             let _dawn_cwd = stream.write(env::current_dir().unwrap().to_str().unwrap().as_bytes());
             // write a 0 byte to separate the cwd and the file path
