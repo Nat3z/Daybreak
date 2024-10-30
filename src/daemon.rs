@@ -1,16 +1,23 @@
 
 pub mod daemonhandler {
-    use std::{io::{Read, Write}, os::unix::net::UnixListener, process::exit};
+    use std::{borrow::BorrowMut, io::{Read, Write}, os::unix::net::UnixListener, process::exit};
+    use super::super::robot::robotmanager;
     pub enum MsgDaemonType {
-        Upload = 1
+        Upload = 1,
+        Connect = 2,
+        Kill = 255
     }
     pub fn query_message_daemon_type(message: &Vec<u8>) -> Option<MsgDaemonType> {
         let message_type = message[0];
         return match message_type {
             1 => Some(MsgDaemonType::Upload),
+            2 => Some(MsgDaemonType::Connect),
+            255 => Some(MsgDaemonType::Kill),
             _ => None
         }
     }
+
+    // create an event queue static variable
     pub fn main_d() {
         let listener = UnixListener::bind("/tmp/daybreak.sock");
         if listener.is_err() {
@@ -40,6 +47,28 @@ pub mod daemonhandler {
                     }
 
                     match message_type.unwrap() {
+                        MsgDaemonType::Kill => {
+                            println!("[Daemon] Received kill message. Gracefully exiting.");
+                            // delete the socket file
+                            let _ = std::fs::remove_file("/tmp/daybreak.sock");
+                            println!("[Daemon] Deleted socket file.");
+
+                            let _ = socket.write(&[200]);
+                            let _ = socket.flush();
+                            exit(0);
+                        },
+                        MsgDaemonType::Connect => {
+                            let mut buf = [0; 15];
+                            println!("[Daemon] Received connect message.");
+                            let _ = socket.read(&mut buf);
+                            let ip = String::from_utf8(buf.to_vec()).unwrap();
+                            println!("[Daemon] Received IP: {:?}", ip);
+                            let _ = socket.write(&[1]);
+                            let _ = socket.flush();
+                            let state = robotmanager::connect(ip.as_str());
+                            let _ = socket.write(&[state]);
+                            let _ = socket.flush();
+                        },
                         MsgDaemonType::Upload => {
                             let mut buffer = [0; 1024];
                             let _dawn_read = socket.read(&mut buffer);
@@ -55,16 +84,16 @@ pub mod daemonhandler {
 
                             let cwd = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[0];
                             let file_path = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[1];
-                            println!("[Daemon] Received file path: {:?}", file_path);
-                            println!("[Daemon] CWD: {:?}", cwd);
+                            println!("[Daemon @Upload] Received file path: {:?}", file_path);
+                            println!("[Daemon @Upload] CWD: {:?}", cwd);
 
                             // combine the cwd and the file path to get the full path
                             let full_path = format!("{}/{}", cwd, file_path);
                             let full_path = full_path.as_str();
-                            println!("[Daemon] Full path: {:?}", full_path);
+                            println!("[Daemon @Upload] Full path: {:?}", full_path);
                             let file_path = std::path::Path::new(full_path);
                             if !file_path.exists() {
-                                println!("[Daemon] File does not exist.");
+                                println!("[Daemon @Upload] File does not exist.");
                                 let _ = socket.write(&[100]);
                                 let _ = socket.flush();
                                 continue;
