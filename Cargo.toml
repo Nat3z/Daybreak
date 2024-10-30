@@ -1,10 +1,11 @@
 [package]
-name = "Daybreak"
+name = "daybreak"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 protobuf = "3"
+signal-hook = "0.3.17"
 
 [build-dependencies]
 protobuf-codegen = "3"
