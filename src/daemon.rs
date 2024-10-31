@@ -1,8 +1,8 @@
 
 pub mod daemonhandler {
-    use std::{borrow::BorrowMut, collections::LinkedList, io::{Read, Write}, os::unix::net::UnixListener, path::Path, process::exit, sync::Arc, thread};
-    use crate::robot::robotmanager::Robot;
-
+    use std::{borrow::BorrowMut, collections::LinkedList, io::{Read, Write}, os::unix::net::{UnixListener, UnixStream}, path::Path, process::exit, sync::Arc, thread};
+    use crate::{daemon::daemonhandler, robot::robotmanager::{run_mode::{Mode, RunMode}, Robot}};
+    use protobuf::{EnumOrUnknown, SpecialFields};
     use ssh2::Session;
     pub enum MsgDaemonType {
         Upload = 1,
@@ -15,6 +15,7 @@ pub mod daemonhandler {
         return match message_type {
             1 => Some(MsgDaemonType::Upload),
             2 => Some(MsgDaemonType::Connect),
+            3 => Some(MsgDaemonType::Run),
             255 => Some(MsgDaemonType::Kill),
             _ => None
         }
@@ -32,6 +33,7 @@ pub mod daemonhandler {
         println!("[Daemon] Listening on /tmp/daybreak.sock");
 
         let mut robot: Arc<Option<Arc<Robot>>> = Arc::new(None);
+        let mut robot_socket: Option<UnixStream> = None;
         loop {
             match listener.accept() {
                 Ok((mut socket, addr)) => {
@@ -73,10 +75,30 @@ pub mod daemonhandler {
                             let _ = socket.write(&[1]);
                             let _ = socket.flush();
                             robot = Arc::new(Some(Arc::new(Robot {
-                                event_queue: LinkedList::new()
+                                // event_queue: LinkedList::new()
                             })));
 
-                            let state = robot.as_ref().unwrap().connect(&ip);
+                            let state = robot.as_ref().clone().unwrap().connect(&ip);
+                            if state == 200 {
+                                println!("[Daemon] Successfully connected to robot. Connecting to robot socket.");
+                                let mut robot_socket_temp = UnixStream::connect("/tmp/daybreak.robot.sock");
+                                // run multiple attempts 
+                                for _ in 0..5 {
+                                    if robot_socket_temp.is_ok() {
+                                        break;
+                                    }
+                                    robot_socket_temp = UnixStream::connect("/tmp/daybreak.robot.sock");
+                                    // wait for 1 second
+                                    thread::sleep(std::time::Duration::from_secs(1));
+                                }
+                                if robot_socket_temp.is_err() {
+                                    println!("[Daemon] Failed to connect to robot socket.");
+                                    exit(1);
+                                }
+                                robot_socket = Some(robot_socket_temp.unwrap());
+                            } else {
+                                println!("[Daemon] Failed to connect to robot.");
+                            }
                             let _ = socket.write(&[state]);
                             let _ = socket.flush();
                         },
@@ -172,19 +194,26 @@ pub mod daemonhandler {
                             println!("[Daemon @Upload] File has been uploaded.");
                         },
                         MsgDaemonType::Run => {
-                            if robot.is_none() {
-                                println!("[Daemon] No Robot Available.");
-                                let _ = socket.write(&[300]);
-                                let _ = socket.flush();
-                                continue;
-                            }
-                            let robot = robot.unwrap();
-                            let mut buffer = [0; 1024];
+                            let mut buffer = [0; 1];
                             let _dawn_read = socket.read(&mut buffer);
                             if _dawn_read.is_err() {
                                 println!("[Daemon] Failed to read from socket.");
+                                return;
+                            }
+                            let buffer = buffer.to_vec();
+                            let run_type: u8 = buffer[0];
+                            if robot.is_none() || robot_socket.is_none() {
+                                println!("[Daemon] No Robot Available.");
+                                let _ = socket.write(&[100]);
+                                let _ = socket.flush();
                                 continue;
                             }
+                            if let Some(ref mut socket) = robot_socket {
+                                socket.write(&[run_type]).unwrap();
+                                socket.flush().unwrap();
+                            }
+
+                            println!("[Daemon] Sent run message to robot.");
 
                         },
                         _ => {

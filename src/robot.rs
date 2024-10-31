@@ -1,9 +1,9 @@
 pub mod robotmanager {
-    use std::{collections::LinkedList, io::{Read, Write}, net::{SocketAddr, TcpStream}, str::FromStr, sync::Arc, thread, time::Duration};
+    use std::{collections::LinkedList, fs, io::{Read, Write}, net::{SocketAddr, TcpStream}, os::unix::net::UnixListener, str::FromStr, sync::Arc, thread, time::Duration};
     include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
     use device::{DevData, Param};
-    use protobuf::Message;
-    use run_mode::RunMode;
+    use protobuf::{EnumOrUnknown, Message, SpecialFields};
+    use run_mode::{Mode, RunMode};
     use text::Text;
 
     const MESSAGE_SIZE: usize = 3;
@@ -17,10 +17,11 @@ pub mod robotmanager {
     }
 
     pub enum EventType {
-        RobotStart
+        RobotStart = 1,
+        RobotStop = 2,
+        RobotAuto = 3
     }
     pub struct Robot {
-        pub event_queue: LinkedList<EventType>
     }
 
     impl Robot {
@@ -36,14 +37,85 @@ pub mod robotmanager {
                 _ => None
             }
         }
+        pub fn query_event_type(&self, message: &Vec<u8>) -> Option<EventType> {
+            let message_type = message[0];
+            return match message_type {
+                1 => Some(EventType::RobotStart),
+                2 => Some(EventType::RobotStop),
+                3 => Some(EventType::RobotAuto),
+                _ => None
+            }
+        }
+
         pub fn exit(code: i32) {
             std::process::exit(code);
         }
 
 
         pub fn main_loop(&self, mut stream: TcpStream) {
+            if fs::metadata("/tmp/daybreak.robot.sock").is_ok() {
+                let _ = fs::remove_file("/tmp/daybreak.robot.sock");
+            }
+            let listener = UnixListener::bind("/tmp/daybreak.robot.sock");
+            if listener.is_err() {
+                println!("[Connection] Failed to bind to socket.");
+                println!("error: {:?}", listener.err());
+                return;
+            }
+            let listener = listener.unwrap();
+
+            println!("[Connection] Listening on /tmp/daybreak.robot.sock");
+            println!("[Connection] Waiting for Daemon to connect...");
+            let daemon_socket = listener.accept();
+            if daemon_socket.is_err() {
+                println!("[Connection] Failed to accept connection from Daemon.");
+                return;
+            }
+            let (mut daemon_socket, _) = daemon_socket.unwrap();
+            println!("[Connection] Accepted connection from Daemon.");
             println!("[Connection] Started Main loop.");
+            daemon_socket.set_nonblocking(true).unwrap();
             loop {
+                let mut event_buffer: [u8; 1] = [0; 1];
+                let event_received = daemon_socket.read(&mut event_buffer);
+                if event_received.is_ok() {
+                    println!("Received an event!");
+                    let event = event_buffer.to_vec();
+                    let event_type = self.query_event_type(&event);
+                    if event_type.is_none() {
+                        println!("[Event] Unknown event type: {:?}", event[0]);
+                        continue;
+                    }
+                    match event_type.unwrap() {
+                        EventType::RobotStart => {
+                            let message = self.send_run_mode(&RunMode {
+                                mode: EnumOrUnknown::from(Mode::TELEOP),
+                                special_fields: SpecialFields::default(),
+                            });
+                            stream.write(message.concat().as_slice()).unwrap();
+                            stream.flush().unwrap();
+                            println!("[RunMode] Started Running.");
+                        },
+                        EventType::RobotStop => {
+                            let message = self.send_run_mode(&RunMode {
+                                mode: EnumOrUnknown::from(Mode::IDLE),
+                                special_fields: SpecialFields::default(),
+                            });
+                            stream.write(message.concat().as_slice()).unwrap();
+                            stream.flush().unwrap();
+                            println!("[RunMode] Stopped Running.");
+                        },
+                        EventType::RobotAuto => {
+                            let message = self.send_run_mode(&RunMode {
+                                mode: EnumOrUnknown::from(Mode::AUTO),
+                                special_fields: SpecialFields::default(),
+                            });
+                            stream.write(message.concat().as_slice()).unwrap();
+                            stream.flush().unwrap();
+                            println!("[RunMode] Started Auto.");
+                        }
+                    }
+                }
                 let mut buffer: [u8; MESSAGE_SIZE] = [0; MESSAGE_SIZE];
                 let _dawn_read = stream.read(&mut buffer);
                 if _dawn_read.is_err() {
@@ -81,9 +153,8 @@ pub mod robotmanager {
                             println!("{:?}", sensors);
                             continue;
                         }
-
                         let devices = sensors.unwrap().devices;
-                        println!("{:?}", devices);
+                        // println!("{:?}", devices);
                     }
                     MsgType::Inputs => {
                         println!("[Inputs] Unsupported");

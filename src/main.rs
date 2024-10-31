@@ -225,6 +225,34 @@ fn main() {
                 }
             }
         },
+        "run" => {
+            if args.len() < 2 {
+                println!("[Run] Please pass the type of run mode. (auto, teleop, stop)");
+                exit(1);
+            }
+
+            let run_mode = args[1].as_str();
+            let run_mode = match run_mode {
+                "auto" => 3,
+                "teleop" => 1,
+                "stop" => 2,
+                _ => {
+                    println!("[Run] Unknown run mode: {:?}", run_mode);
+                    exit(1);
+                    0
+                }
+            };
+            let stream = UnixStream::connect("/tmp/daybreak.sock");
+            if stream.is_err() {
+                println!("[Run] Failed to connect to daemon.");
+                exit(1);
+            }
+            let mut stream = stream.unwrap();
+            stream.write(&[3]).unwrap();
+            stream.write(&[run_mode]).unwrap();
+            let _ = stream.flush();
+            println!("[Run] Sent run message to daemon.");
+        }
         "shutdown" => {
             let stream = UnixStream::connect("/tmp/daybreak.sock");
             if stream.is_err() {
