@@ -75,6 +75,8 @@ pub mod robotmanager {
             println!("[Connection] Accepted connection from Daemon.");
             println!("[Connection] Started Main loop.");
             daemon_socket.set_nonblocking(true).unwrap();
+
+            let mut is_running = false;
             loop {
                 let mut event_buffer: [u8; 1] = [0; 1];
                 let event_received = daemon_socket.read(&mut event_buffer);
@@ -95,6 +97,7 @@ pub mod robotmanager {
                             stream.write(message.concat().as_slice()).unwrap();
                             stream.flush().unwrap();
                             println!("[RunMode] Started Running.");
+                            is_running = true;
                         },
                         EventType::RobotStop => {
                             let message = self.send_run_mode(&RunMode {
@@ -104,6 +107,7 @@ pub mod robotmanager {
                             stream.write(message.concat().as_slice()).unwrap();
                             stream.flush().unwrap();
                             println!("[RunMode] Stopped Running.");
+                            is_running = false;
                         },
                         EventType::RobotAuto => {
                             let message = self.send_run_mode(&RunMode {
@@ -113,6 +117,7 @@ pub mod robotmanager {
                             stream.write(message.concat().as_slice()).unwrap();
                             stream.flush().unwrap();
                             println!("[RunMode] Started Auto.");
+                            is_running = true;
                         }
                     }
                 }
@@ -146,6 +151,10 @@ pub mod robotmanager {
                     MsgType::Log => {
                         let log = Text::parse_from_bytes(&payload).unwrap();
                         println!("[Log] {:?}", log.payload);
+                        if is_running {
+                            daemon_socket.write(log.payload.concat().as_bytes()).unwrap();
+                            daemon_socket.flush().unwrap();
+                        }
                     }
                     MsgType::DeviceData => {
                         let sensors = DevData::parse_from_bytes(&payload);

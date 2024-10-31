@@ -252,6 +252,26 @@ fn main() {
             stream.write(&[run_mode]).unwrap();
             let _ = stream.flush();
             println!("[Run] Sent run message to daemon.");
+            println!("[Run] Waiting for response...");
+            if run_mode == 2 {
+                println!("[Run] Completed exit.");
+                exit(0);
+            }
+            loop {
+                let mut buffer = [0; 3608];
+                let _dawn_read = stream.read(&mut buffer);
+                if _dawn_read.is_err() {
+                    println!("[Run] Failed to read from daemon.");
+                    continue;
+                }
+                let buffer = buffer.to_vec();
+                // turn buffer into text array
+                let buffer: Vec<u8> = buffer.iter().filter(|x| **x != 0).map(|x| *x).collect();
+                let buffer: Vec<char> = buffer.iter().map(|x| *x as char).collect();
+                let buffer: String = buffer.iter().collect();
+                println!("{}", buffer);
+            }
+
         }
         "shutdown" => {
             let stream = UnixStream::connect("/tmp/daybreak.sock");

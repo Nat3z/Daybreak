@@ -208,12 +208,40 @@ pub mod daemonhandler {
                                 let _ = socket.flush();
                                 continue;
                             }
-                            if let Some(ref mut socket) = robot_socket {
-                                socket.write(&[run_type]).unwrap();
-                                socket.flush().unwrap();
+                            if let Some(ref mut robot_socket) = robot_socket {
+                                robot_socket.write(&[run_type]).unwrap();
+                                robot_socket.flush().unwrap();
                             }
 
                             println!("[Daemon] Sent run message to robot.");
+                            // now hold the socket until the robot is done running
+                            let mut robot_socket = robot_socket.as_ref().unwrap();
+
+                            socket.set_nonblocking(true).unwrap();
+                            robot_socket.set_nonblocking(true).unwrap();
+                            println!("[Daemon @Run] Starting log loop...");
+                            loop {
+                                let mut buffer = [0; 1];
+                                let read = socket.read(&mut buffer);
+                                if read.is_ok() {
+                                    socket.set_nonblocking(false).unwrap();
+                                    robot_socket.set_nonblocking(false).unwrap();
+                                    println!("[Daemon @Run] Received message from client. Ending loop.");
+                                    break;
+                                }
+                                let mut buffer = [0; 1024];
+                                let _dawn_read = robot_socket.read(&mut buffer);
+                                if _dawn_read.is_err() {
+                                    continue;
+                                }
+                                socket.write(&buffer).unwrap();
+                                socket.flush().unwrap();
+                            }
+
+                            println!("[Daemon @Run] Log loop ended.");
+                            // signal the robot to stop
+                            robot_socket.write(&[2]).unwrap();
+                            robot_socket.flush().unwrap();
 
                         },
                         _ => {
