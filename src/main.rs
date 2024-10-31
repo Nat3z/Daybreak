@@ -1,6 +1,6 @@
 use linked_hash_map::LinkedHashMap;
 use signal_hook::{consts::SIGINT, iterator::Signals};
-use std::{collections::HashMap, env, io::{Read, Write}, net::TcpStream, os::unix::net::UnixStream, thread};
+use std::{env, io::{Read, Write}, net::TcpStream, os::unix::net::UnixStream, thread};
 use daybreak::daemon::daemonhandler;
 // 3 byte message
 

@@ -1,12 +1,13 @@
 
 pub mod daemonhandler {
-    use std::{borrow::BorrowMut, io::{Read, Write}, os::unix::net::UnixListener, path::Path, process::exit};
-    use super::super::robot::robotmanager;
-    use ssh2::Session;
+    use std::{borrow::BorrowMut, collections::LinkedList, io::{Read, Write}, os::unix::net::UnixListener, path::Path, process::exit, sync::Arc, thread};
+    use crate::robot::robotmanager::Robot;
 
+    use ssh2::Session;
     pub enum MsgDaemonType {
         Upload = 1,
         Connect = 2,
+        Run = 3,
         Kill = 255
     }
     pub fn query_message_daemon_type(message: &Vec<u8>) -> Option<MsgDaemonType> {
@@ -29,6 +30,8 @@ pub mod daemonhandler {
         let listener = listener.unwrap();
 
         println!("[Daemon] Listening on /tmp/daybreak.sock");
+
+        let mut robot: Arc<Option<Arc<Robot>>> = Arc::new(None);
         loop {
             match listener.accept() {
                 Ok((mut socket, addr)) => {
@@ -64,10 +67,16 @@ pub mod daemonhandler {
                             println!("[Daemon] Received connect message.");
                             let _ = socket.read(&mut buf);
                             let ip = String::from_utf8(buf.to_vec()).unwrap();
+                            let ip = ip.trim_matches(char::from(0));
+                            let ip = ip.trim();
                             println!("[Daemon] Received IP: {:?}", ip);
                             let _ = socket.write(&[1]);
                             let _ = socket.flush();
-                            let state = robotmanager::connect(ip.as_str());
+                            robot = Arc::new(Some(Arc::new(Robot {
+                                event_queue: LinkedList::new()
+                            })));
+
+                            let state = robot.as_ref().unwrap().connect(&ip);
                             let _ = socket.write(&[state]);
                             let _ = socket.flush();
                         },
@@ -123,7 +132,7 @@ pub mod daemonhandler {
                                 let _ = socket.flush();
                                 continue;
                             }
-                            let mut remote_file = sess.scp_send(Path::new("/home/pi/runtime/executor/student_code.py"), 0o644, file_path.metadata().unwrap().len(), None);
+                            let remote_file = sess.scp_send(Path::new("/home/pi/runtime/executor/student_code.py"), 0o644, file_path.metadata().unwrap().len(), None);
                             if remote_file.is_err() {
                                 println!("[Daemon @Upload] Failed to send file.");
                                 let _ = socket.write(&[100]);
@@ -131,7 +140,7 @@ pub mod daemonhandler {
                                 continue;
                             }
                             let mut remote_file = remote_file.unwrap();
-                            let mut file = std::fs::File::open(file_path);
+                            let file = std::fs::File::open(file_path);
                             if file.is_err() {
                                 println!("[Daemon @Upload] Failed to open local file.");
                                 let _ = socket.write(&[103]);
@@ -161,6 +170,22 @@ pub mod daemonhandler {
                             let _ = socket.flush();
                             // completed upload.
                             println!("[Daemon @Upload] File has been uploaded.");
+                        },
+                        MsgDaemonType::Run => {
+                            if robot.is_none() {
+                                println!("[Daemon] No Robot Available.");
+                                let _ = socket.write(&[300]);
+                                let _ = socket.flush();
+                                continue;
+                            }
+                            let robot = robot.unwrap();
+                            let mut buffer = [0; 1024];
+                            let _dawn_read = socket.read(&mut buffer);
+                            if _dawn_read.is_err() {
+                                println!("[Daemon] Failed to read from socket.");
+                                continue;
+                            }
+
                         },
                         _ => {
                             println!("[Daemon] Unknown message type: {:?}", buffer[0]);
