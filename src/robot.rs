@@ -152,6 +152,7 @@ pub mod robotmanager {
                         let log = Text::parse_from_bytes(&payload).unwrap();
                         println!("[Log] {:?}", log.payload);
                         if is_running {
+                            daemon_socket.write(&[200]).unwrap();
                             daemon_socket.write(log.payload.concat().as_bytes()).unwrap();
                             daemon_socket.flush().unwrap();
                         }
