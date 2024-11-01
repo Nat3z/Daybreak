@@ -1,6 +1,6 @@
 use linked_hash_map::LinkedHashMap;
 use signal_hook::{consts::SIGINT, iterator::Signals};
-use std::{env, io::{Read, Write}, net::TcpStream, os::unix::net::UnixStream, thread};
+use std::{env, io::{Read, Write}, net::TcpStream, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread};
 use daybreak::daemon::daemonhandler;
 // 3 byte message
 
@@ -247,21 +247,31 @@ fn main() {
                 println!("[Run] Failed to connect to daemon.");
                 exit(1);
             }
-            let mut stream = stream.unwrap();
-            stream.write(&[3]).unwrap();
-            stream.write(&[run_mode]).unwrap();
-            let _ = stream.flush();
+            let stream = Arc::new(Mutex::new(stream.unwrap()));
+            stream.lock().unwrap().write(&[3]).unwrap();
+            stream.lock().unwrap().write(&[run_mode]).unwrap();
+            let _ = stream.lock().unwrap().flush();
             println!("[Run] Sent run message to daemon.");
             println!("[Run] Waiting for response...");
             if run_mode == 2 {
                 println!("[Run] Completed exit.");
                 exit(0);
             }
+            let stream_clone = Arc::clone(&stream);
+            thread::spawn(move || {
+                for sig in Signals::new([SIGINT]).unwrap().forever() {
+                    println!("\n[Run] Received signal {:?}", sig);
+                    stream_clone.lock().unwrap().write(&[4]).unwrap();
+                    stream_clone.lock().unwrap().flush().unwrap();
+                    println!("[Run] Sent stop message to daemon.");
+                    exit(0);
+                }
+            });
+            stream.lock().unwrap().set_nonblocking(true).unwrap();
             loop {
                 let mut buffer = [0; 3608];
-                let _dawn_read = stream.read(&mut buffer);
+                let _dawn_read = stream.lock().unwrap().read(&mut buffer);
                 if _dawn_read.is_err() {
-                    println!("[Run] Failed to read from daemon.");
                     continue;
                 }
                 let buffer = buffer.to_vec();
