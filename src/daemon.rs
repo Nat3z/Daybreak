@@ -1,6 +1,6 @@
 
 pub mod daemonhandler {
-    use std::{borrow::BorrowMut, collections::LinkedList, io::{Read, Write}, os::unix::net::{UnixListener, UnixStream}, path::Path, process::exit, sync::{Arc, Mutex}, thread};
+    use std::{borrow::BorrowMut, collections::LinkedList, fs, io::{Read, Write}, os::unix::net::{UnixListener, UnixStream}, path::Path, process::exit, sync::{Arc, Mutex}, thread};
     use crate::{daemon::daemonhandler, robot::robotmanager::{run_mode::{Mode, RunMode}, Robot}};
     use protobuf::{EnumOrUnknown, SpecialFields};
     use ssh2::Session;
@@ -223,7 +223,7 @@ pub mod daemonhandler {
 
                             socket.lock().unwrap().set_nonblocking(true).unwrap();
                             println!("[Daemon @Run] Starting log loop...");
-
+                            let _ = fs::remove_file("/tmp/robot.run.txt");
                             let socket_clone = Arc::clone(&socket);
                             thread::spawn(move || {
 
@@ -241,13 +241,6 @@ pub mod daemonhandler {
                                         println!("[Daemon @Run] Received message from client. Ending loop.");
                                         break;
                                     }
-                                    let mut buffer = [0; 1024];
-                                    let _dawn_read = robot_socket_clone.lock().unwrap().as_ref().unwrap().read(&mut buffer);
-                                    if _dawn_read.is_err() {
-                                        continue;
-                                    }
-                                    socket.lock().unwrap().write(&buffer).unwrap();
-                                    socket.lock().unwrap().flush().unwrap();
                                 }
 
                                 println!("[Daemon @Run] Log loop ended.");
@@ -267,13 +260,27 @@ pub mod daemonhandler {
                             }
 
                             // now with the robot, ask for the devices.
-                            let mut buffer = [0; 2048];
+                            let mut buffer = [0;3];
                             println!("[Daemon @QueryDevices] Fetching devices...");
                             robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&[4]).unwrap();
                             robot_socket_clone.lock().unwrap().as_ref().unwrap().flush().unwrap();
+                            robot_socket_clone.lock().unwrap().as_ref().unwrap().read_exact(&mut buffer).unwrap();
+
+                            if buffer[0] != 1 {
+                                println!("[Daemon @QueryDevices] Failed to fetch devices.");
+                                socket.lock().unwrap().write(&[0]).unwrap();
+                                socket.lock().unwrap().flush().unwrap();
+                                continue;
+                            }
+
+                            // with the 3 byte header, get the length of the message let length_arr: Vec<u8> = vec![(length & 0x00ff) as u8, (length & 0xf00) as u8];
+                            let length = (buffer[1] as usize) | ((buffer[2] as usize) << 8);
+                            let mut buffer = vec![0; length as usize];
                             robot_socket_clone.lock().unwrap().as_ref().unwrap().read(&mut buffer).unwrap();
                             println!("[Daemon @QueryDevices] Fetched all devices!");
                             socket.lock().unwrap().write(&[1]).unwrap();
+                            socket.lock().unwrap().write(&[(buffer.len() & 0x00ff) as u8]).unwrap();
+                            socket.lock().unwrap().write(&[((buffer.len() & 0xff00) >> 8) as u8]).unwrap();
                             socket.lock().unwrap().write(&buffer).unwrap();
                             socket.lock().unwrap().flush().unwrap();
                             println!("[Daemon @QueryDevices] Sent Devices Info");

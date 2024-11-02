@@ -6,7 +6,9 @@ pub mod robotmanager {
     use run_mode::{Mode, RunMode};
     use text::Text;
 
-    const MESSAGE_SIZE: usize = 3;
+    use crate::daemon;
+
+    const HEADER_SIZE: usize = 3;
     pub enum MsgType {
         RunMode = 0,
         StartPos = 1,
@@ -79,7 +81,10 @@ pub mod robotmanager {
             daemon_socket.set_nonblocking(true).unwrap();
 
             let mut is_running = false;
-            let mut recent_dev_data: Option<DevData> = None;
+            let mut recent_dev_data: Option<Vec<u8>> = None;
+
+            let mut leftover_bytes: Vec<u8> = vec![];
+            // clear the log file
             loop {
                 let mut event_buffer: [u8; 1] = [0; 1];
                 let event_received = daemon_socket.read(&mut event_buffer);
@@ -129,55 +134,95 @@ pub mod robotmanager {
                                 continue;
                             }
                             daemon_socket.write(&[1]).unwrap();
-                            daemon_socket.write(&recent_dev_data.as_ref().unwrap().write_to_bytes().unwrap()).unwrap();
+                            // send the length as well so the daemon knows how much to read
+                            let length = recent_dev_data.as_ref().unwrap().len();
+                            daemon_socket.write(&[(length & 0x00FF) as u8]).unwrap();           // Low byte
+                            daemon_socket.write(&[((length & 0xFF00) >> 8) as u8]).unwrap();    // High byte shifted correctly
+                            daemon_socket.write(&recent_dev_data.as_ref().unwrap()).unwrap();
                             daemon_socket.flush().unwrap();
                         }
                     }
                 }
-                let mut buffer: [u8; MESSAGE_SIZE] = [0; MESSAGE_SIZE];
+                let mut buffer: [u8; HEADER_SIZE] = [0; HEADER_SIZE];
                 let _dawn_read = stream.read(&mut buffer);
                 if _dawn_read.is_err() {
                     println!("[Connection] Failed to read from stream.");
                     continue;
                 }
                 // println!("[MessageHandler] Caught a message!");
-                let message = buffer.to_vec();
-                let message_type = message[0];
+                let buffer = vec![leftover_bytes.to_vec(), buffer.to_vec()].concat(); 
+                let header = buffer.clone();
 
-                let msg_type = self.query_message_type(&message);
-                let msg_length = (message[2] as u16) << 8 | message[1] as u16;
-                let mut buffer: Vec<u8> = vec![0; msg_length as usize];
-                let _read_buffer = stream.read(&mut buffer);
-                let payload = &buffer[..msg_length as usize];
-                if msg_type.is_none() {
-                    println!("[MessageHandler] Unknown message type: {:?}", message_type);
+                if HEADER_SIZE > buffer.len() {
+                    // SAVE THE HEADER SO WE KNOW TO READ THE REST OF THE MESSAGE
+                    leftover_bytes = buffer;
+                    println!("Pushed to leftover stack.");
                     continue;
                 }
+                let msg_type = self.query_message_type(&header);
+                if msg_type.is_none() {
+                    println!("[MessageHandler] Unknown message type: {:?}", header[0]);
+                    continue;
+                }
+                let msg_length = (header[2] as usize) << 8 | header[1] as usize;
+                let mut buffer: Vec<u8> = vec![0; msg_length as usize];
+                let _read_buffer = stream.read_exact(&mut buffer);
+                if let Err(_) = _read_buffer {
+                    leftover_bytes = vec![header, buffer].concat();
+                    println!("Pushed to leftover stack.");
+                    continue;
+                }
+                // remove all 0 bytes trailing the buffer
+
+                let payload = buffer;
 
                 match msg_type.unwrap() {
                     MsgType::RunMode => {
-                        let run_mode = RunMode::parse_from_bytes(&payload).unwrap();
-                        is_running = run_mode.mode == EnumOrUnknown::new(Mode::IDLE);
+                        let run_mode = RunMode::parse_from_bytes(&payload);
+                        if run_mode.is_err() {
+                            println!("[RunMode] Failed to parse RunMode: {:?}", run_mode.err());
+                            continue;
+                        }
+                        is_running = run_mode.unwrap().mode == EnumOrUnknown::new(Mode::IDLE);
                     }
                     MsgType::StartPos => {
                         // println!("[StartPos] Unimplemented.");
                     }
                     MsgType::Log => {
                         let log = Text::parse_from_bytes(&payload).unwrap();
-                        println!("[Log] {:?}", log.payload);
+                        // println!("[Log] {:?}", log.payload);
                         if is_running {
-                            daemon_socket.write(&[200]).unwrap();
-                            daemon_socket.write(log.payload.concat().as_bytes()).unwrap();
-                            daemon_socket.flush().unwrap();
+                            // wriute to a file
+                            // create the file if it doesn't exist
+                            if fs::metadata("/tmp/robot.run.txt").is_err() {
+                                let _ = fs::File::create("/tmp/robot.run.txt");
+                            }
+                            let file = fs::OpenOptions::new().append(true).open("/tmp/robot.run.txt");
+                            if file.is_err() {
+                                println!("[Log] Failed to open file: {:?}", file.err());
+                                continue;
+                            }
+                            let mut file = file.unwrap();
+                            let _write = file.write_all(log.payload.concat().as_bytes());
+                            if _write.is_err() {
+                                println!("[Log] Failed to write to file: {:?}", _write.err());
+                                continue;
+                            }
+                            let _flush = file.flush();
+                            if _flush.is_err() {
+                                println!("[Log] Failed to flush file: {:?}", _flush.err());
+                                continue;
+                            }
                         }
                     }
                     MsgType::DeviceData => {
                         let sensors = DevData::parse_from_bytes(&payload);
                         if sensors.is_err() {
-                            println!("{:?}", sensors);
+                            println!("Failed to parse DevData: {:?}", sensors.err());
                             continue;
                         }
-                        recent_dev_data = Some(sensors.unwrap());
+                        // println!("Received DevData: {:?}", sensors.as_ref().unwrap());
+                        recent_dev_data = Some(sensors.unwrap().write_to_bytes().unwrap());
                     }
                     MsgType::Inputs => {
                         println!("[Inputs] Unsupported");

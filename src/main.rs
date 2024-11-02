@@ -1,8 +1,8 @@
 use linked_hash_map::LinkedHashMap;
 use protobuf::Message;
 use signal_hook::{consts::SIGINT, iterator::Signals};
-use std::{env, io::{Read, Write}, net::TcpStream, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread};
-use daybreak::{daemon::daemonhandler, robot::robotmanager::device::DevData};
+use std::{env, fs, io::{Read, Write}, net::TcpStream, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread};
+use daybreak::{daemon::daemonhandler, robot::robotmanager::device::{param::Val, DevData}};
 // 3 byte message
 
 fn exit(code: i32) {
@@ -143,23 +143,23 @@ fn main() {
                 exit(1);
             }
 
-            println!("[List Devices] Sending connect.");
             let mut stream = stream.unwrap();
             stream.write(&[4]).unwrap();
             stream.flush().unwrap();
-            let mut buffer = [0; 1];
+            let mut buffer = [0; 3];
             stream.read(&mut buffer).unwrap();
             if buffer[0] == 0 {
                 println!("[List Devices] No robot available.");
                 return;
             }
-            let mut buffer = [0; 1024];
-            stream.read(&mut buffer).unwrap();
-            // TODO - REMOVE UN NEEDED 0 bits.
-            println!("{:?}", buffer);
+
+            let msg_length = (buffer[2] as usize) << 8 | buffer[1] as usize;
+            let mut buffer = vec![0; msg_length];
+            stream.read_exact(&mut buffer).unwrap();
             let device_data = DevData::parse_from_bytes(&buffer);
             if device_data.is_err() {
                 println!("[List Devices] Failed to parse devices list.");
+                println!("{:?}", device_data.err().unwrap());
                 return;
             }
             let device_data = device_data.unwrap();
@@ -169,13 +169,28 @@ fn main() {
                 println!("No devices available.");
                 return;
             }
+
+            println!("\n");
             for device in devices {
                 println!("{} ({})", device.uid, device.name);
                 for field in device.params {
-                    println!("{} - ", field.name);
-                    if field.val.is_some() {
-                        print!("{:?}", field.val.unwrap())
-                    }
+                    // turn the val into its respective data type
+                    let val = field.val.as_ref().unwrap();
+                    let val = match val {
+                        Val::Bval(val) => {
+                            val.to_string()
+                        },
+                        Val::Fval(val) => {
+                            val.to_string()
+                        },
+                        Val::Ival(val) => {
+                            val.to_string()
+                        },
+                        _ => {
+                            "Unknown".to_string()
+                        }
+                    };
+                    println!("{} - {}", field.name, val);
                 }
                 println!("\n");
             }
@@ -315,18 +330,25 @@ fn main() {
                 }
             });
             stream.lock().unwrap().set_nonblocking(true).unwrap();
+            let mut buffer = vec![];
             loop {
-                let mut buffer = [0; 3608];
-                let _dawn_read = stream.lock().unwrap().read(&mut buffer);
-                if _dawn_read.is_err() {
+                // read from the /tmp/robot.run.txt and update the log if there is any new data
+                let file = fs::read_to_string("/tmp/robot.run.txt");
+                if file.is_err() {
                     continue;
                 }
-                let buffer = buffer.to_vec();
-                // turn buffer into text array
-                let buffer: Vec<u8> = buffer.iter().filter(|x| **x != 0).map(|x| *x).collect();
-                let buffer: Vec<char> = buffer.iter().map(|x| *x as char).collect();
-                let buffer: String = buffer.iter().collect();
-                println!("{}", buffer);
+                let file = file.unwrap();
+                if file.len() == 0 {
+                    continue;
+                }
+                let file = file.as_bytes().to_vec();
+                // now compare this file with the buffer, if there is new data at the end, then update the buffer, then send the text to console
+                if file.len() > buffer.len() {
+                    let new_data = &file[buffer.len()..];
+                    let new_data = String::from_utf8(new_data.to_vec()).unwrap();
+                    print!("{}", new_data);
+                    buffer = file;
+                }
             }
 
         }
