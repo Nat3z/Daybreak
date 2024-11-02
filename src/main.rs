@@ -1,7 +1,8 @@
 use linked_hash_map::LinkedHashMap;
+use protobuf::Message;
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::{env, io::{Read, Write}, net::TcpStream, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread};
-use daybreak::daemon::daemonhandler;
+use daybreak::{daemon::daemonhandler, robot::robotmanager::device::DevData};
 // 3 byte message
 
 fn exit(code: i32) {
@@ -25,12 +26,14 @@ fn on_shutdown() {
 
 fn main() {
     let mut commands: LinkedHashMap<&str, &str> = LinkedHashMap::new();
-    commands.insert("--connect", "Connect to the Daybreak server.");
+    commands.insert("--connect [IP]", "Connect to Runtime");
     commands.insert("--start", "Start the Daybreak daemon.");
     commands.insert("--start-force", "Start the Daybreak daemon and remove the socket file if it exists.");
     commands.insert("--help", "Display this help message.");
     commands.insert("upload", "Upload a file to the robot.");
     commands.insert("shutdown", "Shutdown the Daybreak daemon.");
+    commands.insert("run [auto, teleop, stop]", "Executes code on the robot.");
+    commands.insert("ls", "Lists all connected devices.");
     let args: Vec<String> = env::args().collect();
     let args: Vec<String> = if args.len() > 1 {
         if args[0] == "target/debug/daybreak" {
@@ -118,7 +121,7 @@ fn main() {
             }
         },
         "--help" => {
-            println!("Usage: daybreak [OPTION");
+            println!("Usage: daybreak [OPTION]");
             println!("Options:");
             commands.iter().for_each(|(k, v)| {
                 println!("    {}\t{}", k, v);
@@ -133,6 +136,50 @@ fn main() {
             on_shutdown();
             daemonhandler::main_d();
         },
+        "ls" => {
+            let stream = UnixStream::connect("/tmp/daybreak.sock");
+            if stream.is_err() {
+                println!("[List Devices] Failed to connect to daemon.");
+                exit(1);
+            }
+
+            println!("[List Devices] Sending connect.");
+            let mut stream = stream.unwrap();
+            stream.write(&[4]).unwrap();
+            stream.flush().unwrap();
+            let mut buffer = [0; 1];
+            stream.read(&mut buffer).unwrap();
+            if buffer[0] == 0 {
+                println!("[List Devices] No robot available.");
+                return;
+            }
+            let mut buffer = [0; 1024];
+            stream.read(&mut buffer).unwrap();
+            // TODO - REMOVE UN NEEDED 0 bits.
+            println!("{:?}", buffer);
+            let device_data = DevData::parse_from_bytes(&buffer);
+            if device_data.is_err() {
+                println!("[List Devices] Failed to parse devices list.");
+                return;
+            }
+            let device_data = device_data.unwrap();
+            // TODO - Work on Parsing Device Data, make it pretty
+            let devices = device_data.devices;
+            if devices.len() == 0 {
+                println!("No devices available.");
+                return;
+            }
+            for device in devices {
+                println!("{} ({})", device.uid, device.name);
+                for field in device.params {
+                    println!("{} - ", field.name);
+                    if field.val.is_some() {
+                        print!("{:?}", field.val.unwrap())
+                    }
+                }
+                println!("\n");
+            }
+        }
         "upload" => {
             // connect to daemon
             let stream = UnixStream::connect("/tmp/daybreak.sock");

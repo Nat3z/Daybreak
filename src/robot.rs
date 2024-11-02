@@ -19,7 +19,8 @@ pub mod robotmanager {
     pub enum EventType {
         RobotStart = 1,
         RobotStop = 2,
-        RobotAuto = 3
+        RobotAuto = 3,
+        RobotGiveDevices = 4
     }
     pub struct Robot {
     }
@@ -43,6 +44,7 @@ pub mod robotmanager {
                 1 => Some(EventType::RobotStart),
                 2 => Some(EventType::RobotStop),
                 3 => Some(EventType::RobotAuto),
+                4 => Some(EventType::RobotGiveDevices),
                 _ => None
             }
         }
@@ -77,6 +79,7 @@ pub mod robotmanager {
             daemon_socket.set_nonblocking(true).unwrap();
 
             let mut is_running = false;
+            let mut recent_dev_data: Option<DevData> = None;
             loop {
                 let mut event_buffer: [u8; 1] = [0; 1];
                 let event_received = daemon_socket.read(&mut event_buffer);
@@ -118,6 +121,16 @@ pub mod robotmanager {
                             stream.flush().unwrap();
                             println!("[RunMode] Started Auto.");
                             is_running = true;
+                        },
+                        EventType::RobotGiveDevices => {
+                            if recent_dev_data.as_ref().is_none() {
+                                daemon_socket.write(&[0]).unwrap();
+                                daemon_socket.flush().unwrap();
+                                continue;
+                            }
+                            daemon_socket.write(&[1]).unwrap();
+                            daemon_socket.write(&recent_dev_data.as_ref().unwrap().write_to_bytes().unwrap()).unwrap();
+                            daemon_socket.flush().unwrap();
                         }
                     }
                 }
@@ -144,6 +157,7 @@ pub mod robotmanager {
                 match msg_type.unwrap() {
                     MsgType::RunMode => {
                         let run_mode = RunMode::parse_from_bytes(&payload).unwrap();
+                        is_running = run_mode.mode == EnumOrUnknown::new(Mode::IDLE);
                     }
                     MsgType::StartPos => {
                         // println!("[StartPos] Unimplemented.");
@@ -163,8 +177,7 @@ pub mod robotmanager {
                             println!("{:?}", sensors);
                             continue;
                         }
-                        let devices = sensors.unwrap().devices;
-                        // println!("{:?}", devices);
+                        recent_dev_data = Some(sensors.unwrap());
                     }
                     MsgType::Inputs => {
                         println!("[Inputs] Unsupported");

@@ -8,6 +8,7 @@ pub mod daemonhandler {
         Upload = 1,
         Connect = 2,
         Run = 3,
+        QueryDevices = 4,
         Kill = 255
     }
     pub fn query_message_daemon_type(message: &Vec<u8>) -> Option<MsgDaemonType> {
@@ -16,6 +17,7 @@ pub mod daemonhandler {
             1 => Some(MsgDaemonType::Upload),
             2 => Some(MsgDaemonType::Connect),
             3 => Some(MsgDaemonType::Run),
+            4 => Some(MsgDaemonType::QueryDevices),
             255 => Some(MsgDaemonType::Kill),
             _ => None
         }
@@ -54,6 +56,7 @@ pub mod daemonhandler {
                         println!("[Daemon] Unknown message type: {:?}", buffer[0]);
                         continue;
                     }
+                    println!("{:?}", &buffer);
 
                     match message_type.unwrap() {
                         MsgDaemonType::Kill => {
@@ -223,7 +226,7 @@ pub mod daemonhandler {
 
                             let socket_clone = Arc::clone(&socket);
                             thread::spawn(move || {
-                                socket_clone.lock().unwrap().write(&[0]).unwrap();
+
                             });
                             thread::spawn(move || {
                                 println!("[Daemon @Run] Waiting for robot to finish running.");
@@ -252,6 +255,28 @@ pub mod daemonhandler {
                                 robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&[2]).unwrap();
                                 robot_socket_clone.lock().unwrap().as_ref().unwrap().flush().unwrap();
                             });
+                        },
+
+                        MsgDaemonType::QueryDevices => {
+                            println!("[Daemon @QueryDevices] Received Query Question...");
+                            if robot.is_none() || robot_socket_clone.lock().unwrap().is_none() {
+                                socket.lock().unwrap().write(&[0]).unwrap();
+                                socket.lock().unwrap().flush().unwrap();
+                                println!("[Daemon @QueryDevices] No robot available.");
+                                continue;
+                            }
+
+                            // now with the robot, ask for the devices.
+                            let mut buffer = [0; 2048];
+                            println!("[Daemon @QueryDevices] Fetching devices...");
+                            robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&[4]).unwrap();
+                            robot_socket_clone.lock().unwrap().as_ref().unwrap().flush().unwrap();
+                            robot_socket_clone.lock().unwrap().as_ref().unwrap().read(&mut buffer).unwrap();
+                            println!("[Daemon @QueryDevices] Fetched all devices!");
+                            socket.lock().unwrap().write(&[1]).unwrap();
+                            socket.lock().unwrap().write(&buffer).unwrap();
+                            socket.lock().unwrap().flush().unwrap();
+                            println!("[Daemon @QueryDevices] Sent Devices Info");
                         },
                         _ => {
                             println!("[Daemon] Unknown message type: {:?}", buffer[0]);
