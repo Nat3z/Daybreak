@@ -1,4 +1,3 @@
-
 pub mod daemonhandler {
     use std::{borrow::BorrowMut, collections::LinkedList, fs, io::{Read, Write}, os::unix::net::{UnixListener, UnixStream}, path::Path, process::exit, sync::{Arc, Mutex}, thread};
     use crate::{daemon::daemonhandler, robot::robotmanager::{run_mode::{Mode, RunMode}, Robot}};
@@ -221,7 +220,6 @@ pub mod daemonhandler {
                             println!("[Daemon] Sent run message to robot.");
                             // now hold the socket until the robot is done running
 
-                            socket.lock().unwrap().set_nonblocking(true).unwrap();
                             println!("[Daemon @Run] Starting log loop...");
                             let _ = fs::remove_file("/tmp/robot.run.txt");
                             let socket_clone = Arc::clone(&socket);
@@ -230,16 +228,43 @@ pub mod daemonhandler {
                             });
                             thread::spawn(move || {
                                 println!("[Daemon @Run] Waiting for robot to finish running.");
-                                socket.lock().unwrap().set_nonblocking(true).unwrap();
-                                robot_socket_clone.lock().unwrap().as_ref().unwrap().set_nonblocking(true).unwrap();
+                                // socket.lock().unwrap().set_nonblocking(true).unwrap();
+                                // robot_socket_clone.lock().unwrap().as_ref().unwrap().set_nonblocking(true).unwrap();
                                 loop {
                                     let mut buffer = [0; 1];
                                     let read = socket.lock().unwrap().read(&mut buffer);
-                                    if read.is_ok() {
-                                        socket.lock().unwrap().set_nonblocking(false).unwrap();
-                                        let _dawn_read = robot_socket_clone.lock().unwrap().as_ref().unwrap().set_nonblocking(false);
+                                    if read.is_err() {
+                                        println!("[Daemon @Run] Failed to read from socket.");
+                                        break;
+                                    }
+                                    if buffer[0] == 4 {
+                                        // socket.lock().unwrap().set_nonblocking(false).unwrap();
+                                        // let _dawn_read = robot_socket_clone.lock().unwrap().as_ref().unwrap().set_nonblocking(false);
                                         println!("[Daemon @Run] Received message from client. Ending loop.");
                                         break;
+                                    }
+
+                                    if buffer[0] == 5 {
+                                        let mut length_bytes = [0u8; 2];
+                                        let _length_read = socket.lock().unwrap().read_exact(&mut length_bytes);
+                                        if _length_read.is_err() {
+                                            println!("[Daemon @Run] Failed to read length bytes.");
+                                            continue;
+                                        }
+
+                                        // Convert length bytes to u16 (little endian)
+                                        let msg_length = u16::from_le_bytes(length_bytes) as usize;
+
+                                        // Read payload of specified length
+                                        let mut payload = vec![0u8; msg_length];
+                                        let _payload_read = socket.lock().unwrap().read_exact(&mut payload);
+                                        if _payload_read.is_err() {
+                                            continue;
+                                        }
+
+                                        robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&[5]).unwrap();
+                                        robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&length_bytes).unwrap();
+                                        robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&payload).unwrap();
                                     }
                                 }
 

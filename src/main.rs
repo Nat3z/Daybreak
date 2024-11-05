@@ -1,8 +1,10 @@
+use gilrs::{Button, Event, GamepadId, Gilrs};
 use linked_hash_map::LinkedHashMap;
 use protobuf::Message;
 use signal_hook::{consts::SIGINT, iterator::Signals};
-use std::{env, fs, io::{Read, Write}, net::TcpStream, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread};
-use daybreak::{daemon::daemonhandler, robot::robotmanager::device::{param::Val, DevData}};
+use termion::{input::TermRead, raw::IntoRawMode};
+use std::{collections::HashMap, env, fs, io::{self, stdin, stdout, Read, Write}, net::TcpStream, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread, time::Duration};
+use daybreak::{daemon::daemonhandler, keymap::{gamepad_mapped, key_map}, robot::robotmanager::device::{param::Val, DevData}};
 // 3 byte message
 
 fn exit(code: i32) {
@@ -21,7 +23,6 @@ fn on_shutdown() {
         }
     });
 }
-
 
 
 fn main() {
@@ -320,13 +321,86 @@ fn main() {
                 exit(0);
             }
             let stream_clone = Arc::clone(&stream);
+            let stream_gamepad_clone = Arc::clone(&stream);
+
             thread::spawn(move || {
                 for sig in Signals::new([SIGINT]).unwrap().forever() {
                     println!("\n[Run] Received signal {:?}", sig);
-                    stream_clone.lock().unwrap().write(&[4]).unwrap();
-                    stream_clone.lock().unwrap().flush().unwrap();
+                    let stream = stream_clone.lock();
+                    if stream.is_err() {
+                        println!("[Run] Failed to connect to daemon.");
+                        exit(1);
+                    }
+                    let mut stream = stream.unwrap();
+                    let _ = stream.write(&[4]);
+                    let _ = stream.flush();
                     println!("[Run] Sent stop message to daemon.");
                     exit(0);
+                }
+            });
+
+            let mut gilrs = Gilrs::new().unwrap();
+
+            // Iterate over all connected gamepads
+            for (_id, gamepad) in gilrs.gamepads() {
+                println!("{} is {:?}", gamepad.name(), gamepad.power_info());
+            }
+
+            thread::spawn(move || {
+                let mut active_gamepad: Option<GamepadId> = None;
+                let mut button_map: HashMap<Button, bool> = HashMap::new();
+                // fill the button map with false
+                button_map.insert(Button::DPadDown, false);
+                button_map.insert(Button::DPadUp, false);
+                button_map.insert(Button::DPadLeft, false);
+                button_map.insert(Button::DPadRight, false);
+                button_map.insert(Button::South, false);
+                button_map.insert(Button::East, false);
+                button_map.insert(Button::West, false);
+                button_map.insert(Button::North, false);
+                button_map.insert(Button::LeftTrigger, false);
+                button_map.insert(Button::RightTrigger, false);
+                button_map.insert(Button::LeftTrigger2, false);
+                button_map.insert(Button::RightTrigger2, false);
+                button_map.insert(Button::LeftThumb, false);
+                button_map.insert(Button::RightThumb, false);
+                button_map.insert(Button::Select, false);
+                button_map.insert(Button::Start, false);
+                button_map.insert(Button::Mode, false);
+                button_map.insert(Button::LeftThumb, false);
+                button_map.insert(Button::RightThumb, false);
+
+                loop {
+                    while let Some(Event { id, event, time, .. }) = gilrs.next_event() {
+                        // println!("{:?} New event from {}: {:?}", time, id, event);
+                        active_gamepad = Some(id);
+                    }
+                    if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+                        // check if the button is pressed
+                        for button in button_map.clone().keys() {
+                            let is_pressed = gamepad.is_pressed(*button);
+                            button_map.insert(button.clone(), is_pressed);
+                        }
+
+                        let mut bitmap: u64 = 0;
+                        // check if the button is pressed
+                        for (button, is_pressed) in button_map.clone().iter() {
+                            let mapped_index = gamepad_mapped(&button);
+                            if *is_pressed {
+                                bitmap |= 1 << mapped_index;
+                            }
+                        }
+                        let mut stream = stream_gamepad_clone.lock().unwrap();
+                        stream.write(&[5]).unwrap();
+                        let bytes = bitmap.to_le_bytes();
+                        // send the length of the message
+                        stream.write(&[(bytes.len() & 0x00ff) as u8]).unwrap();
+                        stream.write(&[((bytes.len() & 0xff00) >> 8) as u8]).unwrap();
+                        stream.write(&bytes).unwrap();
+                        stream.flush().unwrap();
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    
                 }
             });
             stream.lock().unwrap().set_nonblocking(true).unwrap();
