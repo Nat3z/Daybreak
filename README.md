@@ -12,8 +12,10 @@ With this system, it allows for persistent connections to the Robot.
 ## Goals
 
 - [ ] Support the full Dawn Networking Stack
-- [ ] Modularity
-- [ ] Support Input Methods
+- [x] Modularity
+- [x] Support Input Methods
+- [x] Support Keyboard Input
 - [x] Upload code command
 - [ ] Development tools + LSP support
-- [ ] Run/Stop State Support
+> Specifically adding autocompletion for Dawn APIs.
+- [x] Run/Stop State Support

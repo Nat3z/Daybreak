@@ -8,6 +8,7 @@ pub mod daemonhandler {
         Connect = 2,
         Run = 3,
         QueryDevices = 4,
+        Download = 5,
         Kill = 255
     }
     pub fn query_message_daemon_type(message: &Vec<u8>) -> Option<MsgDaemonType> {
@@ -17,6 +18,7 @@ pub mod daemonhandler {
             2 => Some(MsgDaemonType::Connect),
             3 => Some(MsgDaemonType::Run),
             4 => Some(MsgDaemonType::QueryDevices),
+            5 => Some(MsgDaemonType::Download),
             255 => Some(MsgDaemonType::Kill),
             _ => None
         }
@@ -35,6 +37,7 @@ pub mod daemonhandler {
 
         let mut robot: Arc<Option<Arc<Robot>>> = Arc::new(None);
         let mut robot_socket: Arc<Mutex<Option<UnixStream>>> = Arc::new(Mutex::new(None));
+        let mut ip_addr: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         loop {
             match listener.accept() {
                 Ok((socket, addr)) => {
@@ -55,7 +58,6 @@ pub mod daemonhandler {
                         println!("[Daemon] Unknown message type: {:?}", buffer[0]);
                         continue;
                     }
-                    println!("{:?}", &buffer);
 
                     match message_type.unwrap() {
                         MsgDaemonType::Kill => {
@@ -78,6 +80,7 @@ pub mod daemonhandler {
                             println!("[Daemon] Received IP: {:?}", ip);
                             let _ = socket.lock().unwrap().write(&[1]);
                             let _ = socket.lock().unwrap().flush();
+                            ip_addr = Arc::new(Mutex::new(Some(ip.to_string())));
                             robot = Arc::new(Some(Arc::new(Robot {
                                 // event_queue: LinkedList::new()
                             })));
@@ -106,6 +109,95 @@ pub mod daemonhandler {
                             let _ = socket.lock().unwrap().write(&[state]);
                             let _ = socket.lock().unwrap().flush();
                         },
+                        MsgDaemonType::Download => {
+                            let mut buffer = [0; 1024];
+                            let _dawn_read = socket.lock().unwrap().read(&mut buffer);
+                            if _dawn_read.is_err() {
+                                println!("[Daemon] Failed to read from socket.");
+                                return;
+                            }
+
+                            if robot_socket.lock().is_err() {
+                                println!("[Daemon @Download] No available Robot.");
+                                let _ = socket.lock().unwrap().write(&[50]);
+                                let _ = socket.lock().unwrap().flush();
+                                return;
+                            }
+
+                            // read the cwd
+                            let payload_parts = String::from_utf8(buffer.to_vec()).unwrap();
+                            let payload_parts = payload_parts.trim_matches(char::from(0));
+                            let payload_parts = payload_parts.trim();
+                            let cwd = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[0];
+                            let file_path = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[1];
+                            println!("[Daemon @Download] Received file path: {:?}", file_path);
+                            println!("[Daemon @Download] CWD: {:?}", cwd);
+
+                            // combine the cwd and the file path to get the full path
+                            let full_path = format!("{}/{}", cwd, file_path);
+                            let full_path = full_path.as_str();
+                            println!("[Daemon @Download] Full path: {:?}", full_path);
+                            let file_path = std::path::Path::new(full_path);
+                            // if the file exists and was requested, send a 200
+                            let _ = socket.lock().unwrap().write(&[200]);
+                            let _ = socket.lock().unwrap().flush();
+                            // connect over ssh
+                            let tcp = std::net::TcpStream::connect(
+                                format!("{}:22",
+                                    ip_addr.lock().unwrap().as_ref().unwrap()
+                                )
+                            );
+                            if tcp.is_err() {
+                                println!("[Daemon @Upload] Failed to connect to IP address.");
+                                let _ = socket.lock().unwrap().write(&[101]);
+                                let _ = socket.lock().unwrap().flush();
+                                continue;
+                            }
+                            let tcp = tcp.unwrap();
+                            let mut sess = Session::new().unwrap();
+                            sess.set_tcp_stream(tcp);
+                            sess.handshake().unwrap();
+                            let worked = sess.userauth_password("pi", "raspberry");
+                            if worked.is_err() {
+                                println!("[Daemon @Download] Failed to authenticate.");
+                                let _ = socket.lock().unwrap().write(&[101]);
+                                let _ = socket.lock().unwrap().flush();
+                                continue;
+                            }
+                            let remote_file = sess.scp_recv(Path::new("/home/pi/runtime/executor/studentcode.py"));
+
+                            if remote_file.is_err() {
+                                println!("[Daemon @Download] Failed to get file.");
+                                let _ = socket.lock().unwrap().write(&[100]);
+                                let _ = socket.lock().unwrap().flush();
+                                continue;
+                            }
+                            let mut remote_file = remote_file.unwrap();
+                            println!("Path: {:?}", file_path);
+                            let file = std::fs::File::create(file_path);
+                            if file.is_err() {
+                                println!("[Daemon @Upload] Failed to open local file.");
+                                let _ = socket.lock().unwrap().write(&[103]);
+                                let _ = socket.lock().unwrap().flush();
+                                continue;
+                            }
+
+                            let mut file = file.unwrap();
+                            let mut buffer = Vec::new();
+
+                            let read = remote_file.0.read_to_end(&mut buffer);
+
+                            if read.is_err() {
+                                println!("[Daemon @Upload] Failed to read from file.");
+                                exit(1);
+                            }
+                            file.write_all(&buffer).unwrap();
+
+                            let _ = socket.lock().unwrap().write(&[200]);
+                            let _ = socket.lock().unwrap().flush();
+                            // completed upload.
+                            println!("[Daemon @Download] File has been downloaded.");
+                        },
                         MsgDaemonType::Upload => {
                             let mut buffer = [0; 1024];
                             let _dawn_read = socket.lock().unwrap().read(&mut buffer);
@@ -121,7 +213,6 @@ pub mod daemonhandler {
 
                             let cwd = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[0];
                             let file_path = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[1];
-                            let ipaddr = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[2];
                             println!("[Daemon @Upload] Received file path: {:?}", file_path);
                             println!("[Daemon @Upload] CWD: {:?}", cwd);
 
@@ -140,7 +231,13 @@ pub mod daemonhandler {
                             let _ = socket.lock().unwrap().write(&[200]);
                             let _ = socket.lock().unwrap().flush();
                             // connect over ssh
-                            let tcp = std::net::TcpStream::connect(format!("{}:22", ipaddr.trim()));
+                            if ip_addr.lock().unwrap().is_none() {
+                                println!("[Daemon @Upload] Failed to connect to IP address.");
+                                let _ = socket.lock().unwrap().write(&[101]);
+                                let _ = socket.lock().unwrap().flush();
+                                continue;
+                            }
+                            let tcp = std::net::TcpStream::connect(format!("{}:22", ip_addr.lock().unwrap().as_ref().unwrap()));
                             if tcp.is_err() {
                                 println!("[Daemon @Upload] Failed to connect to IP address.");
                                 let _ = socket.lock().unwrap().write(&[101]);
@@ -158,7 +255,7 @@ pub mod daemonhandler {
                                 let _ = socket.lock().unwrap().flush();
                                 continue;
                             }
-                            let remote_file = sess.scp_send(Path::new("/home/pi/runtime/executor/student_code.py"), 0o644, file_path.metadata().unwrap().len(), None);
+                            let remote_file = sess.scp_send(Path::new("/home/pi/runtime/executor/studentcode.py"), 0o644, file_path.metadata().unwrap().len(), None);
                             if remote_file.is_err() {
                                 println!("[Daemon @Upload] Failed to send file.");
                                 let _ = socket.lock().unwrap().write(&[100]);
@@ -265,6 +362,7 @@ pub mod daemonhandler {
                                         robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&[5]).unwrap();
                                         robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&length_bytes).unwrap();
                                         robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&payload).unwrap();
+                                        robot_socket_clone.lock().unwrap().as_ref().unwrap().flush().unwrap();
                                     }
                                 }
 

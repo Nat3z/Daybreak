@@ -160,19 +160,16 @@ pub mod robotmanager {
                             if _payload_read.is_err() {
                                 continue;
                             }
-                            let button = u64::from_le_bytes(payload.as_slice().try_into().unwrap());
+                            let input = Input::parse_from_bytes(&payload);
+                            if input.is_err() {
+                                println!("[Robot @Inputs] Failed to parse input from Daemon.");
+                                continue;
+                            }
                             let input = UserInputs {
                                 inputs: vec![
-                                    Input {
-                                        connected: true,
-                                        source: EnumOrUnknown::new(Source::GAMEPAD),
-                                        axes: vec![1f32, 1f32, 0f32, 0f32],
-                                        buttons: button, 
-                                        special_fields: SpecialFields::new()
-                                    }
+                                    input.unwrap()
                                 ],
                                 special_fields: SpecialFields::new()
-                                
                             };
                             let message = self.send_inputs(&input);
                             stream.write(message.as_slice()).unwrap();

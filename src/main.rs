@@ -1,10 +1,10 @@
-use gilrs::{Button, Event, GamepadId, Gilrs};
+use gilrs::{Axis, Button, Event, GamepadId, Gilrs};
 use linked_hash_map::LinkedHashMap;
-use protobuf::Message;
+use protobuf::{EnumOrUnknown, Message, SpecialFields};
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use termion::{input::TermRead, raw::IntoRawMode};
 use std::{collections::HashMap, env, fs, io::{self, stdin, stdout, Read, Write}, net::TcpStream, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread, time::Duration};
-use daybreak::{daemon::daemonhandler, keymap::{gamepad_mapped, key_map}, robot::robotmanager::device::{param::Val, DevData}};
+use daybreak::{daemon::daemonhandler, keymap::{gamepad_mapped, key_map}, robot::robotmanager::{device::{param::Val, DevData}, input::{Input, Source}}};
 // 3 byte message
 
 fn exit(code: i32) {
@@ -195,7 +195,101 @@ fn main() {
                 }
                 println!("\n");
             }
-        }
+        },
+        "download" => {
+            // connect to daemon
+            let stream = UnixStream::connect("/tmp/daybreak.sock");
+            if stream.is_err() {
+                println!("[Download] Failed to connect to daemon.");
+                exit(1);
+            }
+            if args.len() < 2 {
+                println!("[Download] Please pass a file path to put the file into.");
+                println!("Usage: daybreak download [FILE PATH]");
+                exit(1);
+            }
+            let mut stream = stream.unwrap();
+            // send the message '1' for the type of message, then send the file path to upload
+            let file_path = args[1].as_str();
+
+            let _ = stream.write(&[5]);
+
+            // write the current working directory
+            // write a 0 byte to separate the cwd and the file path
+            // write the current working directory
+            // write a 0 byte to separate the cwd and the file path
+
+
+            let _dawn_cwd = stream.write(env::current_dir().unwrap().to_str().unwrap().as_bytes());
+            let _ = stream.write(&[0]);
+            let file_path_bytes = file_path.as_bytes();
+            let _dawn_upload = stream.write(file_path_bytes);
+            let _dawn_flush = stream.flush();
+            if _dawn_flush.is_err() {
+                println!("[Download] Failed to flush stream.");
+                exit(1);
+            }
+
+            println!("[Download] Sent file path to daemon.");
+
+            // read the response
+            let mut buffer = [0; 1];
+            let _dawn_read = stream.read(&mut buffer);
+
+            if _dawn_read.is_err() {
+                println!("[Download] Failed to read from daemon.");
+                exit(1);
+            }
+            match buffer[0] {
+                200 => {
+                    println!("[Download] File is now downloading...");
+
+                    let mut buffer = [0; 1];
+                    let _dawn_read = stream.read(&mut buffer);
+                    if _dawn_read.is_err() {
+                        println!("[Download] Failed to read from daemon.");
+                        exit(1);
+                    }
+
+                    if buffer[0] == 200 {
+                        println!("[Download] File has been downloaded.");
+                    } else {
+                        match buffer[0] {
+                            100 => {
+                                println!("[Download] File does not exist.");
+                            },
+                            104 => {
+                                println!("[Download] Failed to read IP address.");
+                            },
+                            105 => {
+                                println!("[Download] Failed to download file.");
+                            },
+                            101 => {
+                                println!("[Download] Failed to authenticate with ssh.");
+                            },
+                            102 => {
+                                println!("[Download] Failed to connect to ssh.");
+                            },
+                            103 => {
+                                println!("[Download] Failed to read from local file. (Check permissions)");
+                            },
+                            _ => {
+                                println!("[Download] Unknown response from daemon.");
+                            }
+                        }
+                    }
+                },
+                100 => {
+                    println!("[Download] File does not exist.");
+                },
+                50 => {
+                    println!("[Download] No available robot.");
+                },
+                _ => {
+                    println!("[Download] Unknown response from daemon.");
+                }
+            }
+        },
         "upload" => {
             // connect to daemon
             let stream = UnixStream::connect("/tmp/daybreak.sock");
@@ -203,17 +297,15 @@ fn main() {
                 println!("[Upload] Failed to connect to daemon.");
                 exit(1);
             }
-            if args.len() < 3 {
+            if args.len() < 2 {
                 println!("[Upload] Please pass a file path to upload.");
-                println!("Usage: daybreak upload [FILE PATH] [IP ADDRESS]");
+                println!("Usage: daybreak upload [FILE PATH]");
                 exit(1);
             }
             let mut stream = stream.unwrap();
             // send the message '1' for the type of message, then send the file path to upload
             let file_path = args[1].as_str();
             let file_path_bytes = file_path.as_bytes();
-
-            let ipaddr = args[2].as_str();
             let _ = stream.write(&[1]);
 
             // write the current working directory
@@ -221,8 +313,6 @@ fn main() {
             // write a 0 byte to separate the cwd and the file path
             let _ = stream.write(&[0]);
             let _dawn_upload = stream.write(file_path_bytes);
-            let _ = stream.write(&[0]);
-            let _ = stream.write(ipaddr.as_bytes());
             // now send it
             let _dawn_flush = stream.flush();
             if _dawn_flush.is_err() {
@@ -392,8 +482,20 @@ fn main() {
                         }
                         let mut stream = stream_gamepad_clone.lock().unwrap();
                         stream.write(&[5]).unwrap();
-                        let bytes = bitmap.to_le_bytes();
                         // send the length of the message
+                        let input = Input {
+                            connected: true,
+                            buttons: bitmap,
+                            axes: vec![
+                                gamepad.value(Axis::LeftStickX),
+                                gamepad.value(Axis::LeftStickY),
+                                gamepad.value(Axis::RightStickX),
+                                gamepad.value(Axis::RightStickY)
+                            ],
+                            source: EnumOrUnknown::new(Source::GAMEPAD),
+                            special_fields: SpecialFields::default()
+                        };
+                        let bytes = input.write_to_bytes().unwrap();
                         stream.write(&[(bytes.len() & 0x00ff) as u8]).unwrap();
                         stream.write(&[((bytes.len() & 0xff00) >> 8) as u8]).unwrap();
                         stream.write(&bytes).unwrap();
