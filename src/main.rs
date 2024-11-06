@@ -3,7 +3,7 @@ use linked_hash_map::LinkedHashMap;
 use protobuf::{EnumOrUnknown, Message, SpecialFields};
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use termion::{input::TermRead, raw::IntoRawMode};
-use std::{collections::HashMap, env, fs, io::{self, stdin, stdout, Read, Write}, net::TcpStream, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread, time::Duration};
+use std::{collections::HashMap, env, fs, io::{self, stdin, stdout, Read, Write}, net::TcpStream, ops::Index, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread, time::Duration};
 use daybreak::{daemon::daemonhandler, keymap::{gamepad_mapped, key_map}, robot::robotmanager::{device::{param::Val, DevData}, input::{Input, Source}}};
 // 3 byte message
 
@@ -31,10 +31,13 @@ fn main() {
     commands.insert("--start", "Start the Daybreak daemon.");
     commands.insert("--start-force", "Start the Daybreak daemon and remove the socket file if it exists.");
     commands.insert("--help", "Display this help message.");
-    commands.insert("upload", "Upload a file to the robot.");
+    commands.insert("upload [FILE PATH]", "Upload a file to the robot.");
+    commands.insert("download [FILE PATH]", "Downloads the studentcode from the robot.");
     commands.insert("shutdown", "Shutdown the Daybreak daemon.");
     commands.insert("run [auto, teleop, stop]", "Executes code on the robot.");
     commands.insert("ls", "Lists all connected devices.");
+    commands.insert("    -a", "Attaches to device lister until shutdown.");
+    commands.insert("    -t/--frequency [ms]", "Sets the frequency for device listing reload.");
     let args: Vec<String> = env::args().collect();
     let args: Vec<String> = if args.len() > 1 {
         if args[0] == "target/debug/daybreak" {
@@ -138,63 +141,109 @@ fn main() {
             daemonhandler::main_d();
         },
         "ls" => {
-            let stream = UnixStream::connect("/tmp/daybreak.sock");
-            if stream.is_err() {
-                println!("[List Devices] Failed to connect to daemon.");
-                exit(1);
-            }
+            let attach = args.contains(&"-a".to_string()) || args.contains(&"--attach".to_string());
+            let mut frequency: u64 = 1000;
+            if args.len() > 1 {
+                let arg = args.iter().position(|s| s == "-t" || s == "--frequency");
+                if arg.is_some() {
+                    let argument = args.get(arg.unwrap() + 1);
+                    if argument.is_none() {
+                        println!("Please pass your frequency in miliseconds.");
+                        exit(1);
+                    }
 
-            let mut stream = stream.unwrap();
-            stream.write(&[4]).unwrap();
-            stream.flush().unwrap();
-            let mut buffer = [0; 3];
-            stream.read(&mut buffer).unwrap();
-            if buffer[0] == 0 {
-                println!("[List Devices] No robot available.");
-                return;
-            }
+                    let argument = argument.unwrap();
+                    let freq_from_user = argument.parse::<u64>();
+                    if freq_from_user.is_err() {
+                        println!("Invalid number.");
+                        exit(1);
+                    }
 
-            let msg_length = (buffer[2] as usize) << 8 | buffer[1] as usize;
-            let mut buffer = vec![0; msg_length];
-            stream.read_exact(&mut buffer).unwrap();
-            let device_data = DevData::parse_from_bytes(&buffer);
-            if device_data.is_err() {
-                println!("[List Devices] Failed to parse devices list.");
-                println!("{:?}", device_data.err().unwrap());
-                return;
-            }
-            let device_data = device_data.unwrap();
-            // TODO - Work on Parsing Device Data, make it pretty
-            let devices = device_data.devices;
-            if devices.len() == 0 {
-                println!("No devices available.");
-                return;
-            }
-
-            println!("\n");
-            for device in devices {
-                println!("{} ({})", device.uid, device.name);
-                for field in device.params {
-                    // turn the val into its respective data type
-                    let val = field.val.as_ref().unwrap();
-                    let val = match val {
-                        Val::Bval(val) => {
-                            val.to_string()
-                        },
-                        Val::Fval(val) => {
-                            val.to_string()
-                        },
-                        Val::Ival(val) => {
-                            val.to_string()
-                        },
-                        _ => {
-                            "Unknown".to_string()
-                        }
-                    };
-                    println!("{} - {}", field.name, val);
+                    frequency = freq_from_user.unwrap().clone();
                 }
-                println!("\n");
             }
+
+            fn read_devices() {
+                for _ in 1..10 {
+                    let stream = UnixStream::connect("/tmp/daybreak.sock");
+                    if stream.is_err() {
+                        println!("[List Devices] Failed to connect to daemon.");
+                        exit(1);
+                    }
+
+                    let mut stream = stream.unwrap();
+                    stream.write(&[4]).unwrap();
+                    stream.flush().unwrap();
+                    let mut buffer = [0; 3];
+                    stream.read(&mut buffer).unwrap();
+                    if buffer[0] == 0 {
+                        println!("[List Devices] No robot available.");
+                        return;
+                    }
+
+                    let msg_length = (buffer[2] as usize) << 8 | buffer[1] as usize;
+                    let mut buffer = vec![0; msg_length];
+                    stream.read_exact(&mut buffer).unwrap();
+                    let device_data = DevData::parse_from_bytes(&buffer);
+                    if device_data.is_err() {
+                        println!("[List Devices] Failed to parse devices list.");
+                        println!("{:?}", device_data.err().unwrap());
+                        return;
+                    }
+                    let device_data = device_data.unwrap();
+                    // TODO - Work on Parsing Device Data, make it pretty
+                    let devices = device_data.devices;
+
+                    if devices.len() == 0 {
+                        // println!("No devices available.");
+                        continue;
+                    }
+
+                    for device in devices {
+                        if device.name == "CustomData" {
+                            println!("{} (Stopwatch)", device.uid);
+                        }
+                        else {
+                            println!("{} ({})", device.uid, device.name);
+                        }
+                        for field in device.params {
+                            // turn the val into its respective data type
+                            let val = field.val.as_ref().unwrap();
+                            let val = match val {
+                                Val::Bval(val) => {
+                                    val.to_string()
+                                },
+                                Val::Fval(val) => {
+                                    val.to_string()
+                                },
+                                Val::Ival(val) => {
+                                    val.to_string()
+                                },
+                                _ => {
+                                    "Unknown".to_string()
+                                }
+                            };
+                            println!("{} - {}", field.name, val);
+                        }
+                        println!("\n");
+                    }
+                    break;
+                }
+            }
+            if attach {
+                let duration = Duration::from_millis(frequency);
+                loop {
+                    print!("\x1B[2J\x1B[1;1H");
+                    read_devices();
+                    std::thread::sleep(duration);
+                }
+            }
+            else {
+                read_devices();
+            }
+
+
+
         },
         "download" => {
             // connect to daemon

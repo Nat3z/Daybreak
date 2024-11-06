@@ -401,11 +401,11 @@ pub mod daemonhandler {
                             let mut buffer = vec![0; length as usize];
                             robot_socket_clone.lock().unwrap().as_ref().unwrap().read(&mut buffer).unwrap();
                             println!("[Daemon @QueryDevices] Fetched all devices!");
-                            socket.lock().unwrap().write(&[1]).unwrap();
-                            socket.lock().unwrap().write(&[(buffer.len() & 0x00ff) as u8]).unwrap();
-                            socket.lock().unwrap().write(&[((buffer.len() & 0xff00) >> 8) as u8]).unwrap();
-                            socket.lock().unwrap().write(&buffer).unwrap();
-                            socket.lock().unwrap().flush().unwrap();
+                            let _ = socket.lock().unwrap().write(&[1]);
+                            let _ = socket.lock().unwrap().write(&[(buffer.len() & 0x00ff) as u8]);
+                            let _ = socket.lock().unwrap().write(&[((buffer.len() & 0xff00) >> 8) as u8]);
+                            let _ = socket.lock().unwrap().write(&buffer);
+                            let _ = socket.lock().unwrap().flush();
                             println!("[Daemon @QueryDevices] Sent Devices Info");
                         },
                         _ => {
