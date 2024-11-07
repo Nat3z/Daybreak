@@ -140,7 +140,8 @@ pub mod daemonhandler {
                             if state == 200 {
                                 println!("[Daemon] Successfully connected to robot. Connecting to robot socket.");
                                 let mut robot_socket_temp = UnixStream::connect(format!("{}/daybreak.robot.sock", temp_dir));
-                                robot_type = Arc::new(Mutex::new(Some(buf[0])));
+                                println!("Robot Type: {}", buf_robo[0]);
+                                robot_type = Arc::new(Mutex::new(Some(buf_robo[0])));
                                 // run multiple attempts 
                                 for _ in 0..5 {
                                     if robot_socket_temp.is_ok() {
@@ -216,12 +217,13 @@ pub mod daemonhandler {
                             let mut sess = Session::new().unwrap();
                             sess.set_tcp_stream(tcp);
                             sess.handshake().unwrap();
-                            let password_pair = if robot_type.lock().unwrap().unwrap() == 1 {
+                            let password_pair = if robot_type.lock().unwrap().unwrap() == 2 {
                                 vec!["pi", "raspberry"]
                             } else {
                                 vec!["ubuntu", "potato"]
                             };
                             let worked = sess.userauth_password(password_pair[0], password_pair[1]);
+                            println!("{:?}", password_pair);
                             if worked.is_err() {
                                 println!("[Daemon @Download] Failed to authenticate.");
                                 let _ = socket.lock().unwrap().write(&[101]);
@@ -326,7 +328,7 @@ pub mod daemonhandler {
                             let mut sess = Session::new().unwrap();
                             sess.set_tcp_stream(tcp);
                             sess.handshake().unwrap();
-                            let password_pair = if robot_type.lock().unwrap().unwrap() == 1 {
+                            let password_pair = if robot_type.lock().unwrap().unwrap() == 2 {
                                 vec!["pi", "raspberry"]
                             } else {
                                 vec!["ubuntu", "potato"]
