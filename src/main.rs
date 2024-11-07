@@ -3,7 +3,7 @@ use linked_hash_map::LinkedHashMap;
 use protobuf::{EnumOrUnknown, Message, SpecialFields};
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use termion::{input::TermRead, raw::IntoRawMode};
-use std::{collections::HashMap, env, fs, io::{self, stdin, stdout, Read, Write}, net::TcpStream, ops::Index, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread, time::Duration};
+use std::{collections::HashMap, env::{self, temp_dir}, fs, io::{self, stdin, stdout, Read, Write}, net::TcpStream, ops::Index, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread, time::Duration};
 use daybreak::{daemon::daemonhandler, keymap::{gamepad_mapped, key_map}, robot::robotmanager::{device::{param::Val, DevData}, input::{Input, Source}}};
 // 3 byte message
 
@@ -17,17 +17,17 @@ fn on_shutdown() {
         for sig in signals.forever() {
             println!("\n[Shutdown] Received signal {:?}", sig);
             // delete the socket file
-            let _ = std::fs::remove_file("/tmp/daybreak.sock");
+            let _ = std::fs::remove_file(format!("{}/daybreak.sock", std::env::temp_dir().into_os_string().into_string().unwrap()));
             println!("[Shutdown] Deleted socket file.");
             exit(1);
         }
     });
 }
 
-
 fn main() {
+    let temp_dir = std::env::temp_dir().into_os_string().into_string().unwrap();
     let mut commands: LinkedHashMap<&str, &str> = LinkedHashMap::new();
-    commands.insert("--connect [IP]", "Connect to Runtime");
+    commands.insert("--connect [IP] [raspberry/potato]", "Connect to Runtime");
     commands.insert("--start", "Start the Daybreak daemon.");
     commands.insert("--start-force", "Start the Daybreak daemon and remove the socket file if it exists.");
     commands.insert("--help", "Display this help message.");
@@ -35,64 +35,182 @@ fn main() {
     commands.insert("download [FILE PATH]", "Downloads the studentcode from the robot.");
     commands.insert("shutdown", "Shutdown the Daybreak daemon.");
     commands.insert("run [auto, teleop, stop]", "Executes code on the robot.");
+    commands.insert("input", "Sets the robot to be on generic input listener mode.");
     commands.insert("ls", "Lists all connected devices.");
     commands.insert("    -a", "Attaches to device lister until shutdown.");
     commands.insert("    -t/--frequency [ms]", "Sets the frequency for device listing reload.");
     let args: Vec<String> = env::args().collect();
-    let args: Vec<String> = if args.len() > 1 {
-        if args[0] == "target/debug/daybreak" {
-            args[2..].to_vec()
-        } else {
-            env::args().collect()
-        }
-    } else {
-        println!("Please pass a command.");
-        exit(1);
-        vec![]
-    };
-
-    if args.len() < 1 {
-        println!("Please pass a command.");
-        // show help
+    fn show_help(commands: &LinkedHashMap<&str, &str>) {
         println!("Usage: daybreak [OPTION]");
         println!("Options:");
         commands.iter().for_each(|(k, v)| {
             println!("    {}\t{}", k, v);
         });
+    }
+    let args: Vec<String> = if args.len() > 1 {
+        if args[0] == "target/debug/daybreak" {
+            args[2..].to_vec()
+        } else {
+            args[1..].to_vec()
+        }
+    } else {
+        vec![]
+    };
+
+    if args.len() < 1 {
+        println!("Please pass a command.");
+        show_help(&commands);
         exit(1);
     }
 
     let mut command = args[0].as_str();
 
     if command == "--start-force" {
-        if std::fs::exists("/tmp/daybreak.sock").unwrap() {
-            println!("[Daemon] Socket file already exists. Removing...");
-            let _daybreak_removal = std::fs::remove_file("/tmp/daybreak.sock");
+        if std::fs::exists(format!("{}/daybreak.sock", temp_dir)).unwrap() {
+            println!("[Connection] Socket file already exists. Removing...");
+            let _daybreak_removal = std::fs::remove_file(format!("{}/daybreak.sock", temp_dir));
             if _daybreak_removal.is_err() {
-                println!("[Daemon] Failed to remove socket file.");
+                println!("[Connection] Failed to remove socket file.");
                 exit(1);
             }
         }
         command = "--start";
     }
 
+
+    fn input_executor(stream: Arc<Mutex<UnixStream>>) {
+        let stream_clone = Arc::clone(&stream);
+        thread::spawn(move || {
+            for sig in Signals::new([SIGINT]).unwrap().forever() {
+                println!("\n[Run] Received signal {:?}", sig);
+                let stream = stream_clone.lock();
+                if stream.is_err() {
+                    println!("[Run] Failed to connect to daemon.");
+                    exit(1);
+                }
+                let mut stream = stream.unwrap();
+                let _ = stream.write(&[4]);
+                let _ = stream.flush();
+                println!("[Run] Sent stop message to daemon.");
+                exit(0);
+            }
+        });
+
+        let mut gilrs = Gilrs::new().unwrap();
+
+        // Iterate over all connected gamepads
+        for (_id, gamepad) in gilrs.gamepads() {
+            println!("{} is {:?}", gamepad.name(), gamepad.power_info());
+        }
+
+        thread::spawn(move || {
+            let mut active_gamepad: Option<GamepadId> = None;
+            let mut button_map: HashMap<Button, bool> = HashMap::new();
+            // fill the button map with false
+            button_map.insert(Button::DPadDown, false);
+            button_map.insert(Button::DPadUp, false);
+            button_map.insert(Button::DPadLeft, false);
+            button_map.insert(Button::DPadRight, false);
+            button_map.insert(Button::South, false);
+            button_map.insert(Button::East, false);
+            button_map.insert(Button::West, false);
+            button_map.insert(Button::North, false);
+            button_map.insert(Button::LeftTrigger, false);
+            button_map.insert(Button::RightTrigger, false);
+            button_map.insert(Button::LeftTrigger2, false);
+            button_map.insert(Button::RightTrigger2, false);
+            button_map.insert(Button::LeftThumb, false);
+            button_map.insert(Button::RightThumb, false);
+            button_map.insert(Button::Select, false);
+            button_map.insert(Button::Start, false);
+            button_map.insert(Button::Mode, false);
+            button_map.insert(Button::LeftThumb, false);
+            button_map.insert(Button::RightThumb, false);
+
+            loop {
+                while let Some(Event { id, event, time, .. }) = gilrs.next_event() {
+                    // println!("{:?} New event from {}: {:?}", time, id, event);
+                    active_gamepad = Some(id);
+                }
+                if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+                    // check if the button is pressed
+                    for button in button_map.clone().keys() {
+                        let is_pressed = gamepad.is_pressed(*button);
+                        button_map.insert(button.clone(), is_pressed);
+                    }
+
+                    let mut bitmap: u64 = 0;
+                    // check if the button is pressed
+                    for (button, is_pressed) in button_map.clone().iter() {
+                        let mapped_index = gamepad_mapped(&button);
+                        if *is_pressed {
+                            bitmap |= 1 << mapped_index;
+                        }
+                    }
+                    let mut stream = stream.lock().unwrap();
+                    stream.write(&[5]).unwrap();
+                    // send the length of the message
+                    let input = Input {
+                        connected: true,
+                        buttons: bitmap,
+                        axes: vec![
+                            gamepad.value(Axis::LeftStickX),
+                            gamepad.value(Axis::LeftStickY),
+                            gamepad.value(Axis::RightStickX),
+                            gamepad.value(Axis::RightStickY)
+                        ],
+                        source: EnumOrUnknown::new(Source::GAMEPAD),
+                        special_fields: SpecialFields::default()
+                    };
+                    let bytes = input.write_to_bytes().unwrap();
+                    stream.write(&[(bytes.len() & 0x00ff) as u8]).unwrap();
+                    stream.write(&[((bytes.len() & 0xff00) >> 8) as u8]).unwrap();
+                    stream.write(&bytes).unwrap();
+                    stream.flush().unwrap();
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+
+            }
+        });
+    }
+
     match command {
         "--connect" => {
-            let stream = UnixStream::connect("/tmp/daybreak.sock");
+            let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
             if stream.is_err() {
                 println!("[Connection] Failed to connect to stream.");
                 exit(1);
             }
             if args.len() < 2 {
-                println!("[Connection] Please pass an IP address to connect to.");
+                println!("[Connection] Please pass an IP address to connect to and (optionally) the robot type.");
                 exit(1);
             }
 
             let ip = args[1].as_str();
+            let robot_type = if args.len() >= 3 {
+                args[2].as_str()
+            } else {
+                "potato"
+            };
 
             let mut stream = stream.unwrap();
             let _ = stream.write(&[2]);
-            let _ = stream.write(ip.as_bytes());
+            let robot_ip_as_bytes = ip.as_bytes();
+
+            let robot_type = if robot_type.to_lowercase() == "potato" {
+                1
+            } else if robot_type.to_lowercase() == "raspberry" {
+                2
+            } else {
+                0
+            };
+
+            if robot_type == 0 {
+                println!("[Connection] Invalid robot type. Valid Types: raspberry/potato");
+                exit(1);
+            }
+            let _ = stream.write(&[robot_type]);
+            let _ = stream.write(robot_ip_as_bytes);
             let _ = stream.flush();
             println!("[Connection] Sending connection request to daemon...");
 
@@ -132,7 +250,7 @@ fn main() {
             });
         },
         "--start" => {
-            if std::fs::exists("/tmp/daybreak.sock").unwrap() {
+            if std::fs::exists(format!("{}/daybreak.sock", temp_dir)).unwrap() {
                 println!("[Daemon] Socket file already exists. Exiting...");
                 exit(1);
             }
@@ -165,7 +283,7 @@ fn main() {
 
             fn read_devices() {
                 for _ in 1..10 {
-                    let stream = UnixStream::connect("/tmp/daybreak.sock");
+                    let stream = UnixStream::connect(format!("{}/daybreak.sock", std::env::temp_dir().into_os_string().into_string().unwrap()));
                     if stream.is_err() {
                         println!("[List Devices] Failed to connect to daemon.");
                         exit(1);
@@ -247,7 +365,7 @@ fn main() {
         },
         "download" => {
             // connect to daemon
-            let stream = UnixStream::connect("/tmp/daybreak.sock");
+            let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
             if stream.is_err() {
                 println!("[Download] Failed to connect to daemon.");
                 exit(1);
@@ -341,7 +459,7 @@ fn main() {
         },
         "upload" => {
             // connect to daemon
-            let stream = UnixStream::connect("/tmp/daybreak.sock");
+            let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
             if stream.is_err() {
                 println!("[Upload] Failed to connect to daemon.");
                 exit(1);
@@ -444,7 +562,7 @@ fn main() {
                     0
                 }
             };
-            let stream = UnixStream::connect("/tmp/daybreak.sock");
+            let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
             if stream.is_err() {
                 println!("[Run] Failed to connect to daemon.");
                 exit(1);
@@ -459,106 +577,16 @@ fn main() {
                 println!("[Run] Completed exit.");
                 exit(0);
             }
+
             let stream_clone = Arc::clone(&stream);
-            let stream_gamepad_clone = Arc::clone(&stream);
-
             thread::spawn(move || {
-                for sig in Signals::new([SIGINT]).unwrap().forever() {
-                    println!("\n[Run] Received signal {:?}", sig);
-                    let stream = stream_clone.lock();
-                    if stream.is_err() {
-                        println!("[Run] Failed to connect to daemon.");
-                        exit(1);
-                    }
-                    let mut stream = stream.unwrap();
-                    let _ = stream.write(&[4]);
-                    let _ = stream.flush();
-                    println!("[Run] Sent stop message to daemon.");
-                    exit(0);
-                }
-            });
-
-            let mut gilrs = Gilrs::new().unwrap();
-
-            // Iterate over all connected gamepads
-            for (_id, gamepad) in gilrs.gamepads() {
-                println!("{} is {:?}", gamepad.name(), gamepad.power_info());
-            }
-
-            thread::spawn(move || {
-                let mut active_gamepad: Option<GamepadId> = None;
-                let mut button_map: HashMap<Button, bool> = HashMap::new();
-                // fill the button map with false
-                button_map.insert(Button::DPadDown, false);
-                button_map.insert(Button::DPadUp, false);
-                button_map.insert(Button::DPadLeft, false);
-                button_map.insert(Button::DPadRight, false);
-                button_map.insert(Button::South, false);
-                button_map.insert(Button::East, false);
-                button_map.insert(Button::West, false);
-                button_map.insert(Button::North, false);
-                button_map.insert(Button::LeftTrigger, false);
-                button_map.insert(Button::RightTrigger, false);
-                button_map.insert(Button::LeftTrigger2, false);
-                button_map.insert(Button::RightTrigger2, false);
-                button_map.insert(Button::LeftThumb, false);
-                button_map.insert(Button::RightThumb, false);
-                button_map.insert(Button::Select, false);
-                button_map.insert(Button::Start, false);
-                button_map.insert(Button::Mode, false);
-                button_map.insert(Button::LeftThumb, false);
-                button_map.insert(Button::RightThumb, false);
-
-                loop {
-                    while let Some(Event { id, event, time, .. }) = gilrs.next_event() {
-                        // println!("{:?} New event from {}: {:?}", time, id, event);
-                        active_gamepad = Some(id);
-                    }
-                    if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-                        // check if the button is pressed
-                        for button in button_map.clone().keys() {
-                            let is_pressed = gamepad.is_pressed(*button);
-                            button_map.insert(button.clone(), is_pressed);
-                        }
-
-                        let mut bitmap: u64 = 0;
-                        // check if the button is pressed
-                        for (button, is_pressed) in button_map.clone().iter() {
-                            let mapped_index = gamepad_mapped(&button);
-                            if *is_pressed {
-                                bitmap |= 1 << mapped_index;
-                            }
-                        }
-                        let mut stream = stream_gamepad_clone.lock().unwrap();
-                        stream.write(&[5]).unwrap();
-                        // send the length of the message
-                        let input = Input {
-                            connected: true,
-                            buttons: bitmap,
-                            axes: vec![
-                                gamepad.value(Axis::LeftStickX),
-                                gamepad.value(Axis::LeftStickY),
-                                gamepad.value(Axis::RightStickX),
-                                gamepad.value(Axis::RightStickY)
-                            ],
-                            source: EnumOrUnknown::new(Source::GAMEPAD),
-                            special_fields: SpecialFields::default()
-                        };
-                        let bytes = input.write_to_bytes().unwrap();
-                        stream.write(&[(bytes.len() & 0x00ff) as u8]).unwrap();
-                        stream.write(&[((bytes.len() & 0xff00) >> 8) as u8]).unwrap();
-                        stream.write(&bytes).unwrap();
-                        stream.flush().unwrap();
-                        std::thread::sleep(Duration::from_millis(50));
-                    }
-                    
-                }
+                input_executor(stream_clone);
             });
             stream.lock().unwrap().set_nonblocking(true).unwrap();
             let mut buffer = vec![];
             loop {
-                // read from the /tmp/robot.run.txt and update the log if there is any new data
-                let file = fs::read_to_string("/tmp/robot.run.txt");
+                // read from the {TEMP DIR}/robot.run.txt and update the log if there is any new data
+                let file = fs::read_to_string(format!("{}/robot.run.txt", temp_dir));
                 if file.is_err() {
                     continue;
                 }
@@ -576,9 +604,42 @@ fn main() {
                 }
             }
 
-        }
+        },
+        "input" => {
+            let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
+            if stream.is_err() {
+                println!("[Run] Failed to connect to daemon.");
+                exit(1);
+            }
+            let stream = Arc::new(Mutex::new(stream.unwrap()));
+            stream.lock().unwrap().write(&[6]).unwrap();
+            stream.lock().unwrap().flush().unwrap();
+
+            let mut buffer = [0; 1];
+            let read_error = stream.lock().unwrap().read_exact(&mut buffer);
+
+            if read_error.is_err() {
+                println!("[Input] Failed to read daemon.");
+                exit(1);
+            }
+
+            if buffer[0] == 1 {
+                println!("[Input] Daemon refused to fulfill request.");
+                exit(1);
+            }
+
+            println!("[Input] Sent input request message to daemon.");
+            println!("[Input] Waiting for response...");
+
+            let stream_clone = Arc::clone(&stream);
+            thread::spawn(move || {
+                input_executor(stream_clone);
+            });
+            stream.lock().unwrap().set_nonblocking(true).unwrap();
+            println!("[Input] Started input listener.");
+        },
         "shutdown" => {
-            let stream = UnixStream::connect("/tmp/daybreak.sock");
+            let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
             if stream.is_err() {
                 println!("[Shutdown] Failed to connect to daemon.");
                 exit(1);

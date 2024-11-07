@@ -60,10 +60,11 @@ pub mod robotmanager {
 
 
         pub fn main_loop(&self, mut stream: TcpStream) {
-            if fs::metadata("/tmp/daybreak.robot.sock").is_ok() {
-                let _ = fs::remove_file("/tmp/daybreak.robot.sock");
+            let temp_dir = std::env::temp_dir().into_os_string().into_string().unwrap();
+            if fs::metadata(format!("{}/daybreak.robot.sock", temp_dir)).is_ok() {
+                let _ = fs::remove_file(format!("{}/daybreak.robot.sock", temp_dir));
             }
-            let listener = UnixListener::bind("/tmp/daybreak.robot.sock");
+            let listener = UnixListener::bind(format!("{}/daybreak.robot.sock", temp_dir));
             if listener.is_err() {
                 println!("[Connection] Failed to bind to socket.");
                 println!("error: {:?}", listener.err());
@@ -71,7 +72,7 @@ pub mod robotmanager {
             }
             let listener = listener.unwrap();
 
-            println!("[Connection] Listening on /tmp/daybreak.robot.sock");
+            println!("[Connection] Listening on {}/daybreak.robot.sock", temp_dir);
             println!("[Connection] Waiting for Daemon to connect...");
             let daemon_socket = listener.accept();
             if daemon_socket.is_err() {
@@ -232,10 +233,10 @@ pub mod robotmanager {
                         if is_running {
                             // wriute to a file
                             // create the file if it doesn't exist
-                            if fs::metadata("/tmp/robot.run.txt").is_err() {
-                                let _ = fs::File::create("/tmp/robot.run.txt");
+                            if fs::metadata(format!("{}/robot.run.txt", temp_dir)).is_err()  {
+                                let _ = fs::File::create(format!("{}/robot.run.txt", temp_dir));
                             }
-                            let file = fs::OpenOptions::new().append(true).open("/tmp/robot.run.txt");
+                            let file = fs::OpenOptions::new().append(true).open(format!("{}/robot.run.txt", temp_dir));
                             if file.is_err() {
                                 println!("[Log] Failed to open file: {:?}", file.err());
                                 continue;
