@@ -1,4 +1,5 @@
 use gilrs::{Axis, Button, Event, GamepadId, Gilrs};
+use ini::Ini;
 use linked_hash_map::LinkedHashMap;
 use protobuf::{EnumOrUnknown, Message, SpecialFields};
 use signal_hook::{consts::SIGINT, iterator::Signals};
@@ -25,6 +26,7 @@ fn on_shutdown() {
 }
 
 fn main() {
+    
     let temp_dir = std::env::temp_dir().into_os_string().into_string().unwrap();
     let mut commands: LinkedHashMap<&str, &str> = LinkedHashMap::new();
     commands.insert("--connect [IP] [raspberry/potato]", "Connect to Runtime");
@@ -148,7 +150,7 @@ fn main() {
                         }
                     }
                     let mut stream = stream.lock().unwrap();
-                    stream.write(&[5]).unwrap();
+                    let _ = stream.write(&[5]);
                     // send the length of the message
                     let input = Input {
                         connected: true,
@@ -163,10 +165,10 @@ fn main() {
                         special_fields: SpecialFields::default()
                     };
                     let bytes = input.write_to_bytes().unwrap();
-                    stream.write(&[(bytes.len() & 0x00ff) as u8]).unwrap();
-                    stream.write(&[((bytes.len() & 0xff00) >> 8) as u8]).unwrap();
-                    stream.write(&bytes).unwrap();
-                    stream.flush().unwrap();
+                    let _ = stream.write(&[(bytes.len() & 0x00ff) as u8]);
+                    let _ = stream.write(&[((bytes.len() & 0xff00) >> 8) as u8]);
+                    let _ = stream.write(&bytes);
+                    let _ = stream.flush();
                     std::thread::sleep(Duration::from_millis(50));
                 }
 
@@ -181,17 +183,39 @@ fn main() {
                 println!("[Connection] Failed to connect to stream.");
                 exit(1);
             }
-            if args.len() < 2 {
+            let mut ip: String = String::from("");
+            let mut robot_type: String = String::from("");
+            let ini = Ini::load_from_file("daybreak.ini");
+
+            if let Ok(ini) = ini {
+                let section = ini.section(Some("connection"));
+                if let Some(section) = section {
+                    ip = if let Some(ip_new) = section.get("ip") {
+                        ip_new.to_string()
+                    } else {
+                        "".to_string()
+                    };
+                    robot_type = section.get("robot_type").unwrap().to_string();
+                    println!("[Connection] Using ip: {} and robot_type: {} from daybreak.ini!", ip, robot_type);
+                } 
+                else {
+                    println!("[Connection] Missing ip and robot_type in section [connection] in daybreak.ini.");
+                    exit(1);
+                }
+            }
+            else if args.len() < 2 {
                 println!("[Connection] Please pass an IP address to connect to and (optionally) the robot type.");
                 exit(1);
             }
-
-            let ip = args[1].as_str();
-            let robot_type = if args.len() >= 3 {
-                args[2].as_str()
-            } else {
-                "potato"
-            };
+            else {
+                ip = args[1].as_str().to_string();
+                robot_type = if args.len() >= 3 {
+                    args[2].as_str().to_string()
+                } else {
+                    "potato".to_string()
+                };
+            }
+            
 
             let mut stream = stream.unwrap();
             let _ = stream.write(&[2]);
@@ -370,22 +394,38 @@ fn main() {
                 println!("[Download] Failed to connect to daemon.");
                 exit(1);
             }
-            if args.len() < 2 {
+
+            // ini file parsing instead of args
+            let ini = Ini::load_from_file("daybreak.ini");
+            let mut file_path = "".to_string();
+            if let Ok(ini) = ini {
+                let section = ini.section(Some("connection"));
+                if let Some(section) = section {
+                    file_path = if let Some(file_path) = section.get("code_path") {
+                        file_path.to_string()
+                    } else {
+                        println!("[Download] Missing code_path in section [connection] in daybreak.ini.");
+                        exit(1);
+                        "".to_string()
+                    };
+                    println!("[Download] Using code_path: {} from daybreak.ini!", file_path);
+                } else {
+                    println!("[Download] Missing code_path in section [connection] in daybreak.ini.");
+                    exit(1);
+                } 
+            }
+            else if args.len() < 2 {
                 println!("[Download] Please pass a file path to put the file into.");
                 println!("Usage: daybreak download [FILE PATH]");
                 exit(1);
             }
+            else {
+                file_path = args[1].to_string();
+            }
             let mut stream = stream.unwrap();
             // send the message '1' for the type of message, then send the file path to upload
-            let file_path = args[1].as_str();
 
             let _ = stream.write(&[5]);
-
-            // write the current working directory
-            // write a 0 byte to separate the cwd and the file path
-            // write the current working directory
-            // write a 0 byte to separate the cwd and the file path
-
 
             let _dawn_cwd = stream.write(env::current_dir().unwrap().to_str().unwrap().as_bytes());
             let _ = stream.write(&[0]);
@@ -464,14 +504,34 @@ fn main() {
                 println!("[Upload] Failed to connect to daemon.");
                 exit(1);
             }
-            if args.len() < 2 {
-                println!("[Upload] Please pass a file path to upload.");
+            let ini = Ini::load_from_file("daybreak.ini");
+            let mut file_path = "".to_string();
+            if let Ok(ini) = ini {
+                let section = ini.section(Some("connection"));
+                if let Some(section) = section {
+                    file_path = if let Some(file_path) = section.get("code_path") {
+                        file_path.to_string()
+                    } else {
+                        println!("[Upload] Missing code_path in section [connection] in daybreak.ini.");
+                        exit(1);
+                        "".to_string()
+                    };
+                    println!("[Upload] Using code_path: {} from daybreak.ini!", file_path);
+                } else {
+                    println!("[Upload] Missing code_path in section [connection] in daybreak.ini.");
+                    exit(1);
+                } 
+            }
+            else if args.len() < 2 {
+                println!("[Upload] Please pass a file path to upload the file.");
                 println!("Usage: daybreak upload [FILE PATH]");
                 exit(1);
             }
+            else {
+                file_path = args[1].to_string();
+            }
             let mut stream = stream.unwrap();
             // send the message '1' for the type of message, then send the file path to upload
-            let file_path = args[1].as_str();
             let file_path_bytes = file_path.as_bytes();
             let _ = stream.write(&[1]);
 

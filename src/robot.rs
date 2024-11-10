@@ -311,13 +311,13 @@ pub mod robotmanager {
                 return 100;
             }
             let socket = socket.unwrap();
-            let mut stream = TcpStream::connect_timeout(&socket, Duration::from_secs(5));
-            for i in 0..4 {
+            let mut stream = TcpStream::connect_timeout(&socket, Duration::from_secs(3));
+            for i in 1..4 {
                 stream = TcpStream::connect_timeout(&socket, Duration::from_secs(5));
                 if stream.is_err() {
                     println!("[Connection] Failed to connect to stream. Retrying... {}/4", i);
                     // wait 2 seconds before retrying
-                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    std::thread::sleep(std::time::Duration::from_secs(1));
                     continue;
                 }
                 break;
@@ -327,7 +327,7 @@ pub mod robotmanager {
                 return 100;
             }
             let mut stream = stream.unwrap();
-            // write a 1 bit Uint8Array to the stream
+            // write a 1 bit Uint8Array to the stream to welcome myself.
             let buf: [u8; 1] = [1];
 
             let _dawn_identify = stream.write(&buf);

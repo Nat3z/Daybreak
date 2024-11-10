@@ -167,21 +167,21 @@ pub mod daemonhandler {
                             let _dawn_read = socket.lock().unwrap().read(&mut buffer);
                             if _dawn_read.is_err() {
                                 println!("[Daemon] Failed to read from socket.");
-                                return;
+                                continue;
                             }
 
                             if robot_type.lock().unwrap().is_none() {
                                 println!("[Daemon @Download] Unknown robot type.");
                                 let _ = socket.lock().unwrap().write(&[50]);
                                 let _ = socket.lock().unwrap().flush();
-                                return;
+                                continue;
                             }
 
                             if robot_socket.lock().is_err() {
                                 println!("[Daemon @Download] No available Robot.");
                                 let _ = socket.lock().unwrap().write(&[50]);
                                 let _ = socket.lock().unwrap().flush();
-                                return;
+                                continue;
                             }
 
                             // read the cwd
@@ -269,21 +269,21 @@ pub mod daemonhandler {
                             let _dawn_read = socket.lock().unwrap().read(&mut buffer);
                             if _dawn_read.is_err() {
                                 println!("[Daemon] Failed to read from socket.");
-                                return;
+                                continue;
                             }
 
                             if robot_type.lock().unwrap().is_none() {
                                 println!("[Daemon @Upload] Unknown robot type.");
                                 let _ = socket.lock().unwrap().write(&[50]);
                                 let _ = socket.lock().unwrap().flush();
-                                return;
+                                continue;
                             }
 
                             if robot_socket.lock().is_err() {
                                 println!("[Daemon @Upload] No available Robot.");
                                 let _ = socket.lock().unwrap().write(&[50]);
                                 let _ = socket.lock().unwrap().flush();
-                                return;
+                                continue;
                             }
 
                             // read the cwd
