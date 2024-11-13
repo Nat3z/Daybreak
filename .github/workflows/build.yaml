@@ -70,7 +70,8 @@ jobs:
           command: build
           args: --release --all-features
 
-      - name: Upload Release
+      - name: Upload Release (Linux)
+        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -80,3 +81,13 @@ jobs:
           asset_name: daybreak
           asset_content_type: application/octet-stream
 
+      - name: Upload Release (MacOS)
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: target/release/daybreak
+          asset_name: daybreak-macos
+          asset_content_type: application/octet-stream
