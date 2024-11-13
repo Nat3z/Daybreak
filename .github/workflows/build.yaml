@@ -26,6 +26,7 @@ jobs:
         draft: true
         prerelease: false
 
+
     - name: Output Release URL File
       run: echo "${{ steps.create_release.outputs.upload_url }}" > release_url.txt
     - name: Save Release URL File for publish
@@ -51,6 +52,8 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+      - name: Install Dependencies
+        run: sudo apt install -y protobuf-compiler libssl-dev libudev-dev
 
       - name: Build Cargo Project
         uses: actions-rs/cargo@v1
