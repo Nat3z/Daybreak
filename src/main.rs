@@ -6,7 +6,7 @@ use protobuf::{EnumOrUnknown, Message, SpecialFields};
 use ratatui::{layout::{Layout, Constraint}, style::{Style, Stylize}, widgets::{Block, List, ListItem, ListState}};
 use Constraint::{Fill, Length, Min, Percentage};
 use signal_hook::{consts::SIGINT, iterator::Signals};
-use std::{collections::HashMap, env, fs, io::{Read, Write}, os::unix::net::UnixStream, sync::{Arc, Mutex}, thread, time::Duration};
+use std::{collections::HashMap, env, fs, io::{Read, Write}, os::unix::net::UnixStream, sync::{atomic::AtomicBool, Arc, Mutex}, thread, time::Duration};
 use daybreak::{daemon::daemonhandler, keymap::gamepad_mapped, robot::robotmanager::{device::{param::Val, DevData}, input::{Input, Source}}, tui::tui::App, tui_readdevices::{self, read_devices_tui::{self, read_devices}}, tui_runrobot::{self, run_robot_tui::input_executor}};
 // 3 byte message
 
@@ -38,7 +38,7 @@ fn main() {
     commands.insert("upload [FILE PATH]", "Upload a file to the robot.");
     commands.insert("download [FILE PATH]", "Downloads the studentcode from the robot.");
     commands.insert("shutdown", "Shutdown the Daybreak daemon.");
-    commands.insert("run [auto, teleop, stop]", "Executes code on the robot.");
+    commands.insert("run [auto, teleop, stop] or <empty/--tui>", "Executes code on the robot.\n\tIf no extra paramater provided, automatically goes into TUI mode.");
     commands.insert("input", "Sets the robot to be on generic input listener mode.");
     commands.insert("ls", "Lists all connected devices.");
     commands.insert("    -a", "Attaches to device lister until shutdown.");
@@ -440,11 +440,7 @@ fn main() {
             }
         },
         "run" => {
-            if args.len() < 2 {
-                println!("[Run] Please pass the type of run mode. (auto, teleop, stop)");
-                exit(1);
-            }
-            if args.contains(&"--tui".to_string()) {
+            if args.len() < 2 || args.contains(&"--tui".to_string()) {
                 let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
                 if stream.is_err() {
                     println!("[Run] Failed to connect to daemon.");
@@ -482,7 +478,7 @@ fn main() {
 
             let stream_clone = Arc::clone(&stream);
             thread::spawn(move || {
-                input_executor(stream_clone, true);
+                input_executor(stream_clone, true, Arc::new(AtomicBool::new(false)));
             });
             stream.lock().unwrap().set_nonblocking(true).unwrap();
             let mut buffer = vec![];
@@ -534,7 +530,7 @@ fn main() {
 
             let stream_clone = Arc::clone(&stream);
             thread::spawn(move || {
-                input_executor(stream_clone, true);
+                input_executor(stream_clone, true, Arc::new(AtomicBool::new(false)));
             });
             stream.lock().unwrap().set_nonblocking(true).unwrap();
             println!("[Input] Started input listener.");

@@ -93,7 +93,7 @@ pub mod daemonhandler {
                     let socket = Arc::new(Mutex::new(socket));
                     let robot_socket_clone = Arc::clone(&robot_socket);
                     // handle the connection
-                    println!("[Daemon] Accepted connection from {:?}", addr);
+                    // println!("[Daemon] Accepted connection from {:?}", addr);
                     // read the message
                     let mut buffer = [0; 1];
                     let _dawn_read = socket.lock().unwrap().read(&mut buffer);
@@ -185,11 +185,19 @@ pub mod daemonhandler {
                             }
 
                             // read the cwd
-                            let payload_parts = String::from_utf8(buffer.to_vec()).unwrap();
+                            let payload_parts = String::from_utf8(buffer.to_vec());
+                            if payload_parts.is_err() {
+                                continue;
+                            }
+                            let payload_parts = payload_parts.unwrap();
                             let payload_parts = payload_parts.trim_matches(char::from(0));
                             let payload_parts = payload_parts.trim();
-                            let cwd = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[0];
-                            let file_path = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[1];
+                            let payload_parts = payload_parts.split(char::from(0)).collect::<Vec<&str>>();
+                            if payload_parts.len() <= 2 {
+                                continue;
+                            }
+                            let cwd = payload_parts[0];
+                            let file_path = payload_parts[1];
                             println!("[Daemon @Download] Received file path: {:?}", file_path);
                             println!("[Daemon @Download] CWD: {:?}", cwd);
 
@@ -290,9 +298,15 @@ pub mod daemonhandler {
                             let payload_parts = String::from_utf8(buffer.to_vec()).unwrap();
                             let payload_parts = payload_parts.trim_matches(char::from(0));
                             let payload_parts = payload_parts.trim();
-
-                            let cwd = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[0];
-                            let file_path = payload_parts.split(char::from(0)).collect::<Vec<&str>>()[1];
+                            let payload_parts = payload_parts.split(char::from(0)).collect::<Vec<&str>>();
+                            if payload_parts.len() < 2 {
+                                println!("[Daemon @Upload] Bad file");
+                                let _ = socket.lock().unwrap().write(&[50]);
+                                let _ = socket.lock().unwrap().flush();
+                                continue;
+                            }
+                            let cwd = payload_parts[0];
+                            let file_path = payload_parts[1];
                             println!("[Daemon @Upload] Received file path: {:?}", file_path);
                             println!("[Daemon @Upload] CWD: {:?}", cwd);
 
@@ -404,6 +418,9 @@ pub mod daemonhandler {
 
                             println!("[Daemon @Run] Starting log loop...");
                             let _ = fs::remove_file(format!("{}/robot.run.txt", temp_dir));
+
+                            let _ = socket.lock().unwrap().write(&[1]);
+                            let _ = socket.lock().unwrap().flush();
                             thread::spawn(move || {
                                 println!("[Daemon @Run] Waiting for robot to finish running.");
                                 input_listener(socket, robot_socket_clone);
@@ -426,17 +443,17 @@ pub mod daemonhandler {
                         }
 
                         MsgDaemonType::QueryDevices => {
-                            println!("[Daemon @QueryDevices] Received Query Question...");
+                            // println!("[Daemon @QueryDevices] Received Query Question...");
                             if robot.is_none() || robot_socket_clone.lock().unwrap().is_none() {
-                                socket.lock().unwrap().write(&[0]).unwrap();
-                                socket.lock().unwrap().flush().unwrap();
-                                println!("[Daemon @QueryDevices] No robot available.");
+                                let _ = socket.lock().unwrap().write(&[0]);
+                                let _ = socket.lock().unwrap().flush();
+                                // println!("[Daemon @QueryDevices] No robot available.");
                                 continue;
                             }
 
                             // now with the robot, ask for the devices.
                             let mut buffer = [0;3];
-                            println!("[Daemon @QueryDevices] Fetching devices...");
+                            // println!("[Daemon @QueryDevices] Fetching devices...");
                             robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&[4]).unwrap();
                             robot_socket_clone.lock().unwrap().as_ref().unwrap().flush().unwrap();
                             robot_socket_clone.lock().unwrap().as_ref().unwrap().read_exact(&mut buffer).unwrap();
@@ -452,13 +469,13 @@ pub mod daemonhandler {
                             let length = (buffer[1] as usize) | ((buffer[2] as usize) << 8);
                             let mut buffer = vec![0; length as usize];
                             robot_socket_clone.lock().unwrap().as_ref().unwrap().read(&mut buffer).unwrap();
-                            println!("[Daemon @QueryDevices] Fetched all devices!");
+                            // println!("[Daemon @QueryDevices] Fetched all devices!");
                             let _ = socket.lock().unwrap().write(&[1]);
                             let _ = socket.lock().unwrap().write(&[(buffer.len() & 0x00ff) as u8]);
                             let _ = socket.lock().unwrap().write(&[((buffer.len() & 0xff00) >> 8) as u8]);
                             let _ = socket.lock().unwrap().write(&buffer);
                             let _ = socket.lock().unwrap().flush();
-                            println!("[Daemon @QueryDevices] Sent Devices Info");
+                            // println!("[Daemon @QueryDevices] Sent Devices Info");
                         },
                         _ => {
                             println!("[Daemon] Unknown message type: {:?}", buffer[0]);
