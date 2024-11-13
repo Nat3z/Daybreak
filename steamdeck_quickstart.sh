@@ -1,1 +1,1 @@
-konsole --fullscreen -e "/bin/bash -c \"(cd \"~/Documents/Daybreak\" && ~/daybreak --start-force & (sleep 1 && ~/daybreak run && ~/daybreak shutdown))\""
+konsole --fullscreen -e "/bin/bash -c \"(~/daybreak --start-force >/dev/null 2>&1 & (sleep 1 && ~/daybreak --connect && ~/daybreak run && ~/daybreak shutdown))\""

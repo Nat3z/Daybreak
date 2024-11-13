@@ -119,7 +119,7 @@ pub mod run_robot_tui {
                         let _ = stream.write(&mut buff);
                         let gilrs = Gilrs::new().unwrap();
                         for (_id, gamepad) in gilrs.gamepads() {
-                            terminal_string_clone.lock().unwrap().push_str(format!("{} is {:?}", gamepad.name(), gamepad.power_info()).as_str());
+                            terminal_string_clone.lock().unwrap().push_str(format!("{} is {:?}\n", gamepad.name(), gamepad.power_info()).as_str());
                         }
 
                         if gilrs.gamepads().count() == 0 {
@@ -151,7 +151,7 @@ pub mod run_robot_tui {
                         let _ = stream.write(&mut buff);
                         let gilrs = Gilrs::new().unwrap();
                         for (_id, gamepad) in gilrs.gamepads() {
-                            terminal_string_clone.lock().unwrap().push_str(format!("{} is {:?}", gamepad.name(), gamepad.power_info()).as_str());
+                            terminal_string_clone.lock().unwrap().push_str(format!("{} is {:?}\n", gamepad.name(), gamepad.power_info()).as_str());
                         }
 
                         if gilrs.gamepads().count() == 0 {
