@@ -117,7 +117,14 @@ pub mod run_robot_tui {
 
                         let mut buff = [0; 1];
                         let _ = stream.write(&mut buff);
+                        let gilrs = Gilrs::new().unwrap();
+                        for (_id, gamepad) in gilrs.gamepads() {
+                            terminal_string_clone.lock().unwrap().push_str(format!("{} is {:?}", gamepad.name(), gamepad.power_info()).as_str());
+                        }
 
+                        if gilrs.gamepads().count() == 0 {
+                            terminal_string_clone.lock().unwrap().push_str("No gamepads available.\n");
+                        }
                         if buff[0] != 1 {
                             terminal_string_clone.lock().unwrap().push_str("Failed to start.\n");
                             continue;
@@ -142,6 +149,14 @@ pub mod run_robot_tui {
 
                         let mut buff = [0; 1];
                         let _ = stream.write(&mut buff);
+                        let gilrs = Gilrs::new().unwrap();
+                        for (_id, gamepad) in gilrs.gamepads() {
+                            terminal_string_clone.lock().unwrap().push_str(format!("{} is {:?}", gamepad.name(), gamepad.power_info()).as_str());
+                        }
+
+                        if gilrs.gamepads().count() == 0 {
+                            terminal_string_clone.lock().unwrap().push_str("No gamepads available.\n");
+                        }
                         if buff[0] != 2 {
                             terminal_string_clone.lock().unwrap().push_str("Failed to start.\n");
                             continue;
