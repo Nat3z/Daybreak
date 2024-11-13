@@ -1,6 +1,8 @@
 pub mod daemon;
 pub mod robot;
-
+pub mod tui;
+pub mod tui_readdevices;
+pub mod tui_runrobot;
 pub mod keymap {
   use gilrs::Button;
   use termion::event::Key;
