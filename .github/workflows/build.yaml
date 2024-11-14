@@ -91,3 +91,4 @@ jobs:
           asset_path: target/release/daybreak
           asset_name: daybreak-macos
           asset_content_type: application/octet-stream
+
