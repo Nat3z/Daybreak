@@ -115,8 +115,6 @@ pub mod run_robot_tui {
                         let _ = stream.flush();
                         terminal_string_clone.lock().unwrap().push_str("Starting in teleop mode\n");
 
-                        let mut buff = [0; 1];
-                        let _ = stream.write(&mut buff);
                         let gilrs = Gilrs::new().unwrap();
                         for (_id, gamepad) in gilrs.gamepads() {
                             terminal_string_clone.lock().unwrap().push_str(format!("{} is {:?}\n", gamepad.name(), gamepad.power_info()).as_str());
@@ -124,10 +122,6 @@ pub mod run_robot_tui {
 
                         if gilrs.gamepads().count() == 0 {
                             terminal_string_clone.lock().unwrap().push_str("No gamepads available.\n");
-                        }
-                        if buff[0] != 1 {
-                            terminal_string_clone.lock().unwrap().push_str("Failed to start.\n");
-                            continue;
                         }
                         *is_robot_running_clone.lock().unwrap() = true;
                         let stream_clone = Arc::clone(&stream_clone);
@@ -147,8 +141,6 @@ pub mod run_robot_tui {
                         let _ = stream.flush();
                         terminal_string_clone.lock().unwrap().push_str("Starting in input mode\n");
 
-                        let mut buff = [0; 1];
-                        let _ = stream.write(&mut buff);
                         let gilrs = Gilrs::new().unwrap();
                         for (_id, gamepad) in gilrs.gamepads() {
                             terminal_string_clone.lock().unwrap().push_str(format!("{} is {:?}\n", gamepad.name(), gamepad.power_info()).as_str());
@@ -157,10 +149,7 @@ pub mod run_robot_tui {
                         if gilrs.gamepads().count() == 0 {
                             terminal_string_clone.lock().unwrap().push_str("No gamepads available.\n");
                         }
-                        if buff[0] != 2 {
-                            terminal_string_clone.lock().unwrap().push_str("Failed to start.\n");
-                            continue;
-                        }
+                        
                         *is_robot_running_clone.lock().unwrap() = true;
                         let stream_clone = Arc::clone(&stream_clone);
                         let atomic_break_loop = Arc::clone(&atomic_break_loop);
@@ -191,15 +180,8 @@ pub mod run_robot_tui {
                         let _ = stream.flush();
 
                         terminal_string_clone.lock().unwrap().push_str("Starting in autonomous mode\n");
-                        let mut buff = [0; 1];
-                        let _ = stream.write(&mut buff);
-
-                        if buff[0] != 1 {
-                            terminal_string_clone.lock().unwrap().push_str("Failed to start.\n");
-                            continue;
-                        }
+                        
                         *is_robot_running_clone.lock().unwrap() = true;
-                        terminal_string_clone.lock().unwrap().push_str("Started\n");
                     },
                     event::Event::Key(event::KeyEvent { code: event::KeyCode::Up, ..}) => {
                         if *selected_pane.lock().unwrap() == 1 {
