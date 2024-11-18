@@ -153,7 +153,7 @@ pub mod daemonhandler {
                                 }
                                 if robot_socket_temp.is_err() {
                                     println!("[Daemon] Failed to connect to robot socket.");
-                                    exit(1);
+                                    continue;
                                 }
                                 robot_socket = Arc::new(Mutex::new(Some(robot_socket_temp.unwrap())));
                             } else {
@@ -263,7 +263,7 @@ pub mod daemonhandler {
 
                             if read.is_err() {
                                 println!("[Daemon @Upload] Failed to read from file.");
-                                exit(1);
+                                continue;
                             }
                             file.write_all(&buffer).unwrap();
 
@@ -372,17 +372,23 @@ pub mod daemonhandler {
 
                             let mut file = file.unwrap();
                             let mut buffer = [0; 1024];
+                            let mut failed = false;
                             loop {
                                 let read = file.read(&mut buffer);
                                 if read.is_err() {
                                     println!("[Daemon @Upload] Failed to read from file.");
-                                    exit(1);
+                                    failed = true;
+                                    continue;
                                 }
                                 let read = read.unwrap();
                                 if read == 0 {
                                     break;
                                 }
                                 let _ = remote_file.write(&buffer[..read]);
+                            }
+
+                            if failed {
+                                continue;
                             }
                             let _ = remote_file.send_eof();
                             let _ = remote_file.wait_eof();
@@ -398,7 +404,7 @@ pub mod daemonhandler {
                             let _dawn_read = socket.lock().unwrap().read(&mut buffer);
                             if _dawn_read.is_err() {
                                 println!("[Daemon] Failed to read from socket.");
-                                return;
+                                continue;
                             }
                             let buffer = buffer.to_vec();
                             let run_type: u8 = buffer[0];
@@ -432,7 +438,7 @@ pub mod daemonhandler {
                                 println!("[Daemon @InputListener] Request failed.");
                                 let _ = socket.lock().unwrap().write(&[1]);
                                 let _ = socket.lock().unwrap().flush();
-                                return;
+                                continue;
                             }
                             let _ = socket.lock().unwrap().write(&[2]);
                             let _ = socket.lock().unwrap().flush();
