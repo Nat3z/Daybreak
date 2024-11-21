@@ -281,6 +281,8 @@ fn main() {
                 println!("[Download] Failed to read from daemon.");
                 exit(1);
             }
+
+            println!("{}", buffer[0]);
             match buffer[0] {
                 200 => {
                     println!("[Download] File is now downloading...");
@@ -315,7 +317,7 @@ fn main() {
                                 println!("[Download] Failed to read from local file. (Check permissions)");
                             },
                             _ => {
-                                println!("[Download] Unknown response from daemon.");
+                                println!("[Download] Unknown response from daemon. {}", buffer[0]);
                             }
                         }
                     }

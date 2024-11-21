@@ -163,6 +163,7 @@ pub mod daemonhandler {
                             let _ = socket.lock().unwrap().flush();
                         },
                         MsgDaemonType::Download => {
+                            println!("[Daemon] Download event caught!");
                             let mut buffer = [0; 1024];
                             let _dawn_read = socket.lock().unwrap().read(&mut buffer);
                             if _dawn_read.is_err() {
@@ -193,7 +194,7 @@ pub mod daemonhandler {
                             let payload_parts = payload_parts.trim_matches(char::from(0));
                             let payload_parts = payload_parts.trim();
                             let payload_parts = payload_parts.split(char::from(0)).collect::<Vec<&str>>();
-                            if payload_parts.len() <= 2 {
+                            if payload_parts.len() <= 1 {
                                 continue;
                             }
                             let cwd = payload_parts[0];
@@ -299,7 +300,7 @@ pub mod daemonhandler {
                             let payload_parts = payload_parts.trim_matches(char::from(0));
                             let payload_parts = payload_parts.trim();
                             let payload_parts = payload_parts.split(char::from(0)).collect::<Vec<&str>>();
-                            if payload_parts.len() < 2 {
+                            if payload_parts.len() < 1 {
                                 println!("[Daemon @Upload] Bad file");
                                 let _ = socket.lock().unwrap().write(&[50]);
                                 let _ = socket.lock().unwrap().flush();
