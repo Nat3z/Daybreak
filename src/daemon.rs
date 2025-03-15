@@ -1,8 +1,24 @@
 pub mod daemonhandler {
-    use std::{borrow::BorrowMut, collections::LinkedList, fs, io::{Read, Write}, os::unix::net::{UnixListener, UnixStream}, path::Path, process::exit, sync::{Arc, Mutex}, thread};
-    use crate::{daemon::daemonhandler, robot::robotmanager::{run_mode::{Mode, RunMode}, Robot}};
+    use crate::{
+        daemon::daemonhandler,
+        robot::robotmanager::{
+            run_mode::{Mode, RunMode},
+            Robot,
+        },
+    };
     use protobuf::{EnumOrUnknown, SpecialFields};
     use ssh2::Session;
+    use std::{
+        borrow::BorrowMut,
+        collections::LinkedList,
+        fs,
+        io::{Read, Write},
+        os::unix::net::{UnixListener, UnixStream},
+        path::Path,
+        process::exit,
+        sync::{Arc, Mutex},
+        thread,
+    };
     pub enum MsgDaemonType {
         Upload = 1,
         Connect = 2,
@@ -10,7 +26,7 @@ pub mod daemonhandler {
         QueryDevices = 4,
         Download = 5,
         InputListener = 6,
-        Kill = 255
+        Kill = 255,
     }
     pub fn query_message_daemon_type(message: &Vec<u8>) -> Option<MsgDaemonType> {
         let message_type = message[0];
@@ -22,8 +38,8 @@ pub mod daemonhandler {
             5 => Some(MsgDaemonType::Download),
             6 => Some(MsgDaemonType::InputListener),
             255 => Some(MsgDaemonType::Kill),
-            _ => None
-        }
+            _ => None,
+        };
     }
 
     // create an event queue static variable
@@ -42,7 +58,10 @@ pub mod daemonhandler {
         let mut robot_socket: Arc<Mutex<Option<UnixStream>>> = Arc::new(Mutex::new(None));
         let mut ip_addr: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let mut robot_type: Arc<Mutex<Option<u8>>> = Arc::new(Mutex::new(None));
-        fn input_listener(socket: Arc<Mutex<UnixStream>>, robot_socket: Arc<Mutex<Option<UnixStream>>>) {
+        fn input_listener(
+            socket: Arc<Mutex<UnixStream>>,
+            robot_socket: Arc<Mutex<Option<UnixStream>>>,
+        ) {
             loop {
                 let mut buffer = [0; 1];
                 let read = socket.lock().unwrap().read(&mut buffer);
@@ -75,17 +94,53 @@ pub mod daemonhandler {
                         continue;
                     }
 
-                    robot_socket.lock().unwrap().as_ref().unwrap().write(&[5]).unwrap();
-                    robot_socket.lock().unwrap().as_ref().unwrap().write(&length_bytes).unwrap();
-                    robot_socket.lock().unwrap().as_ref().unwrap().write(&payload).unwrap();
-                    robot_socket.lock().unwrap().as_ref().unwrap().flush().unwrap();
+                    robot_socket
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .write(&[5])
+                        .unwrap();
+                    robot_socket
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .write(&length_bytes)
+                        .unwrap();
+                    robot_socket
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .write(&payload)
+                        .unwrap();
+                    robot_socket
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .flush()
+                        .unwrap();
                 }
             }
 
             println!("[Daemon @Run] Input loop ended.");
             // signal the robot to stop
-            robot_socket.lock().unwrap().as_ref().unwrap().write(&[2]).unwrap();
-            robot_socket.lock().unwrap().as_ref().unwrap().flush().unwrap();
+            robot_socket
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .write(&[2])
+                .unwrap();
+            robot_socket
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .flush()
+                .unwrap();
         }
         loop {
             match listener.accept() {
@@ -118,7 +173,7 @@ pub mod daemonhandler {
                             let _ = socket.lock().unwrap().write(&[200]);
                             let _ = socket.lock().unwrap().flush();
                             exit(0);
-                        },
+                        }
                         MsgDaemonType::Connect => {
                             let mut buf_robo = [0; 1];
                             let _ = socket.lock().unwrap().read(&mut buf_robo);
@@ -139,15 +194,21 @@ pub mod daemonhandler {
                             let state = robot.as_ref().clone().unwrap().connect(&ip);
                             if state == 200 {
                                 println!("[Daemon] Successfully connected to robot. Connecting to robot socket.");
-                                let mut robot_socket_temp = UnixStream::connect(format!("{}/daybreak.robot.sock", temp_dir));
+                                let mut robot_socket_temp = UnixStream::connect(format!(
+                                    "{}/daybreak.robot.sock",
+                                    temp_dir
+                                ));
                                 println!("Robot Type: {}", buf_robo[0]);
                                 robot_type = Arc::new(Mutex::new(Some(buf_robo[0])));
-                                // run multiple attempts 
+                                // run multiple attempts
                                 for _ in 0..5 {
                                     if robot_socket_temp.is_ok() {
                                         break;
                                     }
-                                    robot_socket_temp = UnixStream::connect(format!("{}/daybreak.robot.sock", temp_dir));
+                                    robot_socket_temp = UnixStream::connect(format!(
+                                        "{}/daybreak.robot.sock",
+                                        temp_dir
+                                    ));
                                     // wait for 1 second
                                     thread::sleep(std::time::Duration::from_secs(1));
                                 }
@@ -155,13 +216,14 @@ pub mod daemonhandler {
                                     println!("[Daemon] Failed to connect to robot socket.");
                                     continue;
                                 }
-                                robot_socket = Arc::new(Mutex::new(Some(robot_socket_temp.unwrap())));
+                                robot_socket =
+                                    Arc::new(Mutex::new(Some(robot_socket_temp.unwrap())));
                             } else {
                                 println!("[Daemon] Failed to connect to robot.");
                             }
                             let _ = socket.lock().unwrap().write(&[state]);
                             let _ = socket.lock().unwrap().flush();
-                        },
+                        }
                         MsgDaemonType::Download => {
                             println!("[Daemon] Download event caught!");
                             let mut buffer = [0; 1024];
@@ -193,7 +255,8 @@ pub mod daemonhandler {
                             let payload_parts = payload_parts.unwrap();
                             let payload_parts = payload_parts.trim_matches(char::from(0));
                             let payload_parts = payload_parts.trim();
-                            let payload_parts = payload_parts.split(char::from(0)).collect::<Vec<&str>>();
+                            let payload_parts =
+                                payload_parts.split(char::from(0)).collect::<Vec<&str>>();
                             if payload_parts.len() <= 1 {
                                 continue;
                             }
@@ -211,11 +274,10 @@ pub mod daemonhandler {
                             let _ = socket.lock().unwrap().write(&[200]);
                             let _ = socket.lock().unwrap().flush();
                             // connect over ssh
-                            let tcp = std::net::TcpStream::connect(
-                                format!("{}:22",
-                                    ip_addr.lock().unwrap().as_ref().unwrap()
-                                )
-                            );
+                            let tcp = std::net::TcpStream::connect(format!(
+                                "{}:22",
+                                ip_addr.lock().unwrap().as_ref().unwrap()
+                            ));
                             if tcp.is_err() {
                                 println!("[Daemon @Upload] Failed to connect to IP address.");
                                 let _ = socket.lock().unwrap().write(&[101]);
@@ -239,7 +301,8 @@ pub mod daemonhandler {
                                 let _ = socket.lock().unwrap().flush();
                                 continue;
                             }
-                            let remote_file = sess.scp_recv(Path::new("/home/pi/runtime/executor/studentcode.py"));
+                            let remote_file = sess
+                                .scp_recv(Path::new("/home/pi/runtime/executor/studentcode.py"));
 
                             if remote_file.is_err() {
                                 println!("[Daemon @Download] Failed to get file.");
@@ -272,7 +335,7 @@ pub mod daemonhandler {
                             let _ = socket.lock().unwrap().flush();
                             // completed upload.
                             println!("[Daemon @Download] File has been downloaded.");
-                        },
+                        }
                         MsgDaemonType::Upload => {
                             let mut buffer = [0; 1024];
                             let _dawn_read = socket.lock().unwrap().read(&mut buffer);
@@ -299,20 +362,17 @@ pub mod daemonhandler {
                             let payload_parts = String::from_utf8(buffer.to_vec()).unwrap();
                             let payload_parts = payload_parts.trim_matches(char::from(0));
                             let payload_parts = payload_parts.trim();
-                            let payload_parts = payload_parts.split(char::from(0)).collect::<Vec<&str>>();
+                            let payload_parts =
+                                payload_parts.split(char::from(0)).collect::<Vec<&str>>();
                             if payload_parts.len() < 1 {
                                 println!("[Daemon @Upload] Bad file");
                                 let _ = socket.lock().unwrap().write(&[50]);
                                 let _ = socket.lock().unwrap().flush();
                                 continue;
                             }
-                            let cwd = payload_parts[0];
-                            let file_path = payload_parts[1];
-                            println!("[Daemon @Upload] Received file path: {:?}", file_path);
-                            println!("[Daemon @Upload] CWD: {:?}", cwd);
-
+                            println!("[Daemon @Upload {:?}]", payload_parts);
                             // combine the cwd and the file path to get the full path
-                            let full_path = format!("{}/{}", cwd, file_path);
+                            let full_path = payload_parts.join("/");
                             let full_path = full_path.as_str();
                             println!("[Daemon @Upload] Full path: {:?}", full_path);
                             let file_path = std::path::Path::new(full_path);
@@ -332,7 +392,10 @@ pub mod daemonhandler {
                                 let _ = socket.lock().unwrap().flush();
                                 continue;
                             }
-                            let tcp = std::net::TcpStream::connect(format!("{}:22", ip_addr.lock().unwrap().as_ref().unwrap()));
+                            let tcp = std::net::TcpStream::connect(format!(
+                                "{}:22",
+                                ip_addr.lock().unwrap().as_ref().unwrap()
+                            ));
                             if tcp.is_err() {
                                 println!("[Daemon @Upload] Failed to connect to IP address.");
                                 let _ = socket.lock().unwrap().write(&[101]);
@@ -355,7 +418,21 @@ pub mod daemonhandler {
                                 let _ = socket.lock().unwrap().flush();
                                 continue;
                             }
-                            let remote_file = sess.scp_send(Path::new("/home/pi/runtime/executor/studentcode.py"), 0o644, file_path.metadata().unwrap().len(), None);
+                            // show out the remote path of the file
+                            let mut home_dir = sess.channel_session().unwrap();
+                            home_dir.exec("echo $HOME").unwrap();
+                            let mut home_dir_str = String::new();
+                            home_dir.read_to_string(&mut home_dir_str).unwrap();
+                            home_dir_str = home_dir_str.trim().to_string();
+                            println!("[Daemon @Upload] Remote home directory: {}", home_dir_str);
+                            let path = format!("{}/runtime/executor/studentcode.py", home_dir_str)
+                                .to_string();
+                            let remote_file = sess.scp_send(
+                                Path::new(&path),
+                                0o644,
+                                file_path.metadata().unwrap().len(),
+                                None,
+                            );
                             if remote_file.is_err() {
                                 println!("[Daemon @Upload] Failed to send file.");
                                 let _ = socket.lock().unwrap().write(&[100]);
@@ -399,7 +476,7 @@ pub mod daemonhandler {
                             let _ = socket.lock().unwrap().flush();
                             // completed upload.
                             println!("[Daemon @Upload] File has been uploaded.");
-                        },
+                        }
                         MsgDaemonType::Run => {
                             let mut buffer = [0; 1];
                             let _dawn_read = socket.lock().unwrap().read(&mut buffer);
@@ -432,7 +509,7 @@ pub mod daemonhandler {
                                 println!("[Daemon @Run] Waiting for robot to finish running.");
                                 input_listener(socket, robot_socket_clone);
                             });
-                        },
+                        }
                         MsgDaemonType::InputListener => {
                             println!("[Daemon @InputListener] Received Input Listening Request...");
                             if robot_socket_clone.lock().unwrap().is_none() {
@@ -444,7 +521,9 @@ pub mod daemonhandler {
                             let _ = socket.lock().unwrap().write(&[2]);
                             let _ = socket.lock().unwrap().flush();
                             thread::spawn(move || {
-                                println!("[Daemon @InputListener] Waiting for robot to finish running.");
+                                println!(
+                                    "[Daemon @InputListener] Waiting for robot to finish running."
+                                );
                                 input_listener(socket, robot_socket_clone);
                             });
                         }
@@ -459,11 +538,29 @@ pub mod daemonhandler {
                             }
 
                             // now with the robot, ask for the devices.
-                            let mut buffer = [0;3];
+                            let mut buffer = [0; 3];
                             // println!("[Daemon @QueryDevices] Fetching devices...");
-                            robot_socket_clone.lock().unwrap().as_ref().unwrap().write(&[4]).unwrap();
-                            robot_socket_clone.lock().unwrap().as_ref().unwrap().flush().unwrap();
-                            robot_socket_clone.lock().unwrap().as_ref().unwrap().read_exact(&mut buffer).unwrap();
+                            robot_socket_clone
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .unwrap()
+                                .write(&[4])
+                                .unwrap();
+                            robot_socket_clone
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .unwrap()
+                                .flush()
+                                .unwrap();
+                            robot_socket_clone
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .unwrap()
+                                .read_exact(&mut buffer)
+                                .unwrap();
 
                             if buffer[0] != 1 {
                                 println!("[Daemon @QueryDevices] Failed to fetch devices.");
@@ -475,20 +572,32 @@ pub mod daemonhandler {
                             // with the 3 byte header, get the length of the message let length_arr: Vec<u8> = vec![(length & 0x00ff) as u8, (length & 0xf00) as u8];
                             let length = (buffer[1] as usize) | ((buffer[2] as usize) << 8);
                             let mut buffer = vec![0; length as usize];
-                            robot_socket_clone.lock().unwrap().as_ref().unwrap().read(&mut buffer).unwrap();
+                            robot_socket_clone
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .unwrap()
+                                .read(&mut buffer)
+                                .unwrap();
                             // println!("[Daemon @QueryDevices] Fetched all devices!");
                             let _ = socket.lock().unwrap().write(&[1]);
-                            let _ = socket.lock().unwrap().write(&[(buffer.len() & 0x00ff) as u8]);
-                            let _ = socket.lock().unwrap().write(&[((buffer.len() & 0xff00) >> 8) as u8]);
+                            let _ = socket
+                                .lock()
+                                .unwrap()
+                                .write(&[(buffer.len() & 0x00ff) as u8]);
+                            let _ = socket
+                                .lock()
+                                .unwrap()
+                                .write(&[((buffer.len() & 0xff00) >> 8) as u8]);
                             let _ = socket.lock().unwrap().write(&buffer);
                             let _ = socket.lock().unwrap().flush();
                             // println!("[Daemon @QueryDevices] Sent Devices Info");
-                        },
+                        }
                         _ => {
                             println!("[Daemon] Unknown message type: {:?}", buffer[0]);
                         }
                     }
-                },
+                }
                 Err(e) => {
                     println!("accept function failed: {:?}", e);
                 }
