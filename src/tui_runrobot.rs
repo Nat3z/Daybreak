@@ -724,7 +724,6 @@ pub mod run_robot_tui {
                 for (button, is_pressed) in button_map.iter() {
                     if *is_pressed {
                         let mapped_index = gamepad_mapped(&button);
-                        println!("Mapped index: {:?}", button);
                         bitmap |= 1 << mapped_index;
                     }
                 }
