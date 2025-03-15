@@ -170,8 +170,14 @@ pub mod run_robot_tui {
                         *is_robot_running_clone.lock().unwrap() = true;
                         let stream_clone = Arc::clone(&stream_clone);
                         let atomic_break_loop = Arc::clone(&atomic_break_loop);
+                        let terminal_string_clone = Arc::clone(&terminal_string_clone);
                         thread::spawn(move || {
-                            input_executor(Arc::clone(&stream_clone), false, atomic_break_loop)
+                            input_executor(
+                                Arc::clone(&stream_clone),
+                                false,
+                                atomic_break_loop,
+                                Arc::clone(&terminal_string_clone),
+                            )
                         });
                     }
                     event::Event::Key(event::KeyEvent {
@@ -211,8 +217,14 @@ pub mod run_robot_tui {
                         *is_robot_running_clone.lock().unwrap() = true;
                         let stream_clone = Arc::clone(&stream_clone);
                         let atomic_break_loop = Arc::clone(&atomic_break_loop);
+                        let terminal_string_clone = Arc::clone(&terminal_string_clone);
                         thread::spawn(move || {
-                            input_executor(Arc::clone(&stream_clone), false, atomic_break_loop)
+                            input_executor(
+                                Arc::clone(&stream_clone),
+                                false,
+                                atomic_break_loop,
+                                Arc::clone(&terminal_string_clone),
+                            )
                         });
                     }
                     event::Event::Key(event::KeyEvent {
@@ -265,7 +277,6 @@ pub mod run_robot_tui {
                             app_terminal_clone.lock().unwrap().scroll_up();
                         }
                     }
-
                     event::Event::Key(event::KeyEvent {
                         code: event::KeyCode::Down,
                         ..
@@ -429,6 +440,7 @@ pub mod run_robot_tui {
         stream: Arc<Mutex<UnixStream>>,
         utilize_stopper: bool,
         receiver: Arc<AtomicBool>,
+        terminal_string: Arc<Mutex<String>>,
     ) -> () {
         let stream_clone = Arc::clone(&stream);
         if utilize_stopper {
@@ -458,7 +470,183 @@ pub mod run_robot_tui {
 
         let mut active_gamepad: Option<GamepadId> = None;
         let mut button_map: HashMap<Button, bool> = HashMap::new();
-        // fill the button map with false
+        let mut button_mapping: HashMap<Button, Button> = HashMap::new();
+
+        let standardized_button_indices = HashMap::from([
+            (Button::South, 0),
+            (Button::East, 1),
+            (Button::West, 2),
+            (Button::North, 3),
+            (Button::LeftTrigger, 4),
+            (Button::RightTrigger, 5),
+            (Button::LeftTrigger2, 6),
+            (Button::RightTrigger2, 7),
+            // (Button::LeftThumb, 8),
+            // (Button::RightThumb, 9),
+            (Button::Select, 10),
+            (Button::Start, 11),
+            (Button::DPadUp, 12),
+            (Button::DPadDown, 13),
+            (Button::DPadLeft, 14),
+            (Button::DPadRight, 15),
+        ]);
+
+        // Try to load existing mapping first
+        let config_dir = std::path::PathBuf::from(".").join(".daybreak");
+        let mapping_path = config_dir.join("controller_mapping.txt");
+
+        if let Ok(mapping_str) = fs::read_to_string(&mapping_path) {
+            terminal_string
+                .lock()
+                .unwrap()
+                .push_str("Found existing controller mapping, attempting to load...\n");
+            for mapping in mapping_str.split(',') {
+                if let Some((idx_str, button_str)) = mapping.split_once(':') {
+                    if let Ok(idx) = idx_str.trim().parse::<i32>() {
+                        // Parse button string by removing quotes and Debug formatting
+                        let clean_button_str = button_str.trim().trim_matches('"');
+                        let button = match clean_button_str {
+                            "South" => Some(Button::South),
+                            "East" => Some(Button::East),
+                            "West" => Some(Button::West),
+                            "North" => Some(Button::North),
+                            "LeftTrigger" => Some(Button::LeftTrigger),
+                            "RightTrigger" => Some(Button::RightTrigger),
+                            "LeftTrigger2" => Some(Button::LeftTrigger2),
+                            "RightTrigger2" => Some(Button::RightTrigger2),
+                            "Select" => Some(Button::Select),
+                            "Start" => Some(Button::Start),
+                            "DPadUp" => Some(Button::DPadUp),
+                            "DPadDown" => Some(Button::DPadDown),
+                            "DPadLeft" => Some(Button::DPadLeft),
+                            "DPadRight" => Some(Button::DPadRight),
+                            _ => None,
+                        };
+
+                        if let Some(button) = button {
+                            if let Some((&std_button, _)) = standardized_button_indices
+                                .iter()
+                                .find(|(_, &val)| val == idx)
+                            {
+                                button_mapping.insert(std_button, button);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !button_mapping.is_empty() {
+                terminal_string.lock().unwrap().push_str(&format!(
+                    "Successfully loaded {}/{} button mappings!\n",
+                    button_mapping.len(),
+                    standardized_button_indices.len()
+                ));
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str(&format!("Loaded mapping: {:?}\n", button_mapping));
+            } else {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str("Failed to load any valid mappings, starting interactive setup...\n");
+            }
+
+            let missing = standardized_button_indices
+                .keys()
+                .filter(|k| !button_mapping.contains_key(k))
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str(&format!("Missing mappings: {:?}\n", missing));
+            }
+        }
+
+        // Only do interactive mapping if we don't have a complete mapping
+        if button_mapping.len() != standardized_button_indices.len() {
+            terminal_string
+                .lock()
+                .unwrap()
+                .push_str("\nController button mapping setup:\n");
+            terminal_string
+                .lock()
+                .unwrap()
+                .push_str("Press each button when prompted to configure the mapping\n");
+            terminal_string
+                .lock()
+                .unwrap()
+                .push_str("Press Ctrl+C to cancel at any time\n\n");
+
+            let button_names = vec![
+                ("A/South button", Button::South),
+                ("B/East button", Button::East),
+                ("X/West button", Button::West),
+                ("Y/North button", Button::North),
+                ("Left bumper", Button::LeftTrigger),
+                ("Right bumper", Button::RightTrigger),
+                ("Left trigger", Button::LeftTrigger2),
+                ("Right trigger", Button::RightTrigger2),
+                ("Select/Back", Button::Select),
+                ("Start", Button::Start),
+                ("D-pad Up", Button::DPadUp),
+                ("D-pad Down", Button::DPadDown),
+                ("D-pad Left", Button::DPadLeft),
+                ("D-pad Right", Button::DPadRight),
+            ];
+
+            // Wait for each button press
+            for (index, btn) in button_names.iter().enumerate() {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str(&format!("Press the {} button...\n", btn.0));
+
+                'button_wait: loop {
+                    while let Some(Event { id, event, .. }) = gilrs.next_event() {
+                        if let gilrs::EventType::ButtonPressed(button, _) = event {
+                            terminal_string
+                                .lock()
+                                .unwrap()
+                                .push_str(&format!("Mapped {} to {:?}\n", btn.0, button));
+                            button_mapping.insert(btn.1, button);
+                            break 'button_wait;
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+
+            terminal_string
+                .lock()
+                .unwrap()
+                .push_str("\nButton mapping complete!\n");
+
+            // Save mapping to file
+            let mapping_str = button_mapping
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{:?}:{:?}",
+                        standardized_button_indices.get(k).unwrap_or(&0),
+                        v
+                    )
+                })
+                .collect::<Vec<String>>()
+                .join(",");
+
+            let config_dir = std::path::PathBuf::from(".").join(".daybreak");
+
+            fs::create_dir_all(&config_dir).unwrap_or_default();
+            if let Err(e) = fs::write(config_dir.join("controller_mapping.txt"), mapping_str) {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str(&format!("Failed to save mapping: {}\n", e));
+            }
+        }
+
         button_map.insert(Button::DPadDown, false);
         button_map.insert(Button::DPadUp, false);
         button_map.insert(Button::DPadLeft, false);
@@ -475,9 +663,26 @@ pub mod run_robot_tui {
         button_map.insert(Button::RightThumb, false);
         button_map.insert(Button::Select, false);
         button_map.insert(Button::Start, false);
-        button_map.insert(Button::Mode, false);
-        button_map.insert(Button::LeftThumb, false);
-        button_map.insert(Button::RightThumb, false);
+        // button_map.insert(Button::LeftThumb, false);
+        // button_map.insert(Button::RightThumb, false);
+
+        let stream_clone = Arc::clone(&stream);
+        let terminal_string = Arc::new(Mutex::new(String::new()));
+        let terminal_string_clone = Arc::clone(&terminal_string);
+
+        // Spawn a thread to watch terminal string changes
+        thread::spawn(move || {
+            let mut last_len = 0;
+            loop {
+                let current = terminal_string_clone.lock().unwrap();
+                if current.len() > last_len {
+                    print!("{}", &current[last_len..]);
+                    last_len = current.len();
+                }
+                drop(current);
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
 
         loop {
             if receiver.load(Ordering::Acquire) {
@@ -488,27 +693,43 @@ pub mod run_robot_tui {
                 id, event, time, ..
             }) = gilrs.next_event()
             {
-                // println!("{:?} New event from {}: {:?}", time, id, event);
+                match event {
+                    gilrs::EventType::ButtonPressed(button, _) => {
+                        if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+                            // Find which standard button this maps to
+                            if let Some((&std_button, _)) =
+                                button_mapping.iter().find(|(_, &v)| v == button)
+                            {
+                                button_map.insert(std_button, true);
+                            }
+                        }
+                    }
+                    gilrs::EventType::ButtonReleased(button, _) => {
+                        if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+                            // Find which standard button this maps to
+                            if let Some((&std_button, _)) =
+                                button_mapping.iter().find(|(_, &v)| v == button)
+                            {
+                                button_map.insert(std_button, false);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
                 active_gamepad = Some(id);
             }
             if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-                // check if the button is pressed
-                for button in button_map.clone().keys() {
-                    let is_pressed = gamepad.is_pressed(*button);
-                    button_map.insert(button.clone(), is_pressed);
-                }
-
                 let mut bitmap: u64 = 0;
-                // check if the button is pressed
-                for (button, is_pressed) in button_map.clone().iter() {
-                    let mapped_index = gamepad_mapped(&button);
+                // Set bitmap based on current button_map state
+                for (button, is_pressed) in button_map.iter() {
                     if *is_pressed {
+                        let mapped_index = gamepad_mapped(&button);
+                        println!("Mapped index: {:?}", button);
                         bitmap |= 1 << mapped_index;
                     }
                 }
                 let mut stream = stream.lock().unwrap();
                 let _ = stream.write(&[5]);
-                // send the length of the message
                 let input = Input {
                     connected: true,
                     buttons: bitmap,

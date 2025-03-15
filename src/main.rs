@@ -1,13 +1,38 @@
 use crossterm::event;
+use daybreak::{
+    daemon::daemonhandler,
+    keymap::gamepad_mapped,
+    robot::robotmanager::{
+        device::{param::Val, DevData},
+        input::{Input, Source},
+    },
+    tui::tui::App,
+    tui_readdevices::{
+        self,
+        read_devices_tui::{self, read_devices},
+    },
+    tui_runrobot::{self, run_robot_tui::input_executor},
+};
 use gilrs::{Axis, Button, Event, GamepadId, Gilrs};
 use ini::Ini;
 use linked_hash_map::LinkedHashMap;
 use protobuf::{EnumOrUnknown, Message, SpecialFields};
-use ratatui::{layout::{Layout, Constraint}, style::{Style, Stylize}, widgets::{Block, List, ListItem, ListState}};
-use Constraint::{Fill, Length, Min, Percentage};
+use ratatui::{
+    layout::{Constraint, Layout},
+    style::{Style, Stylize},
+    widgets::{Block, List, ListItem, ListState},
+};
 use signal_hook::{consts::SIGINT, iterator::Signals};
-use std::{collections::HashMap, env, fs, io::{Read, Write}, os::unix::net::UnixStream, sync::{atomic::AtomicBool, Arc, Mutex}, thread, time::Duration};
-use daybreak::{daemon::daemonhandler, keymap::gamepad_mapped, robot::robotmanager::{device::{param::Val, DevData}, input::{Input, Source}}, tui::tui::App, tui_readdevices::{self, read_devices_tui::{self, read_devices}}, tui_runrobot::{self, run_robot_tui::input_executor}};
+use std::{
+    collections::HashMap,
+    env, fs,
+    io::{Read, Write},
+    os::unix::net::UnixStream,
+    sync::{atomic::AtomicBool, Arc, Mutex},
+    thread,
+    time::Duration,
+};
+use Constraint::{Fill, Length, Min, Percentage};
 // 3 byte message
 
 fn exit(code: i32) {
@@ -20,7 +45,10 @@ fn on_shutdown() {
         for sig in signals.forever() {
             println!("\n[Shutdown] Received signal {:?}", sig);
             // delete the socket file
-            let _ = std::fs::remove_file(format!("{}/daybreak.sock", std::env::temp_dir().into_os_string().into_string().unwrap()));
+            let _ = std::fs::remove_file(format!(
+                "{}/daybreak.sock",
+                std::env::temp_dir().into_os_string().into_string().unwrap()
+            ));
             println!("[Shutdown] Deleted socket file.");
             exit(1);
         }
@@ -28,21 +56,32 @@ fn on_shutdown() {
 }
 
 fn main() {
-    
     let temp_dir = std::env::temp_dir().into_os_string().into_string().unwrap();
     let mut commands: LinkedHashMap<&str, &str> = LinkedHashMap::new();
     commands.insert("--connect [IP] [raspberry/potato]", "Connect to Runtime");
     commands.insert("--start", "Start the Daybreak daemon.");
-    commands.insert("--start-force", "Start the Daybreak daemon and remove the socket file if it exists.");
+    commands.insert(
+        "--start-force",
+        "Start the Daybreak daemon and remove the socket file if it exists.",
+    );
     commands.insert("--help", "Display this help message.");
     commands.insert("upload [FILE PATH]", "Upload a file to the robot.");
-    commands.insert("download [FILE PATH]", "Downloads the studentcode from the robot.");
+    commands.insert(
+        "download [FILE PATH]",
+        "Downloads the studentcode from the robot.",
+    );
     commands.insert("shutdown", "Shutdown the Daybreak daemon.");
     commands.insert("run [auto, teleop, stop] or <empty/--tui>", "Executes code on the robot.\n\tIf no extra paramater provided, automatically goes into TUI mode.");
-    commands.insert("input", "Sets the robot to be on generic input listener mode.");
+    commands.insert(
+        "input",
+        "Sets the robot to be on generic input listener mode.",
+    );
     commands.insert("ls", "Lists all connected devices.");
     commands.insert("    -a", "Attaches to device lister until shutdown.");
-    commands.insert("    -t/--frequency [ms]", "Sets the frequency for device listing reload.");
+    commands.insert(
+        "    -t/--frequency [ms]",
+        "Sets the frequency for device listing reload.",
+    );
     let args: Vec<String> = env::args().collect();
     fn show_help(commands: &LinkedHashMap<&str, &str>) {
         println!("Usage: daybreak [OPTION]");
@@ -81,9 +120,6 @@ fn main() {
         command = "--start";
     }
 
-
-
-
     match command {
         "--connect" => {
             let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
@@ -104,18 +140,18 @@ fn main() {
                         "".to_string()
                     };
                     robot_type = section.get("robot_type").unwrap().to_string();
-                    println!("[Connection] Using ip: {} and robot_type: {} from daybreak.ini!", ip, robot_type);
-                } 
-                else {
+                    println!(
+                        "[Connection] Using ip: {} and robot_type: {} from daybreak.ini!",
+                        ip, robot_type
+                    );
+                } else {
                     println!("[Connection] Missing ip and robot_type in section [connection] in daybreak.ini.");
                     exit(1);
                 }
-            }
-            else if args.len() < 2 {
+            } else if args.len() < 2 {
                 println!("[Connection] Please pass an IP address to connect to and (optionally) the robot type.");
                 exit(1);
-            }
-            else {
+            } else {
                 ip = args[1].as_str().to_string();
                 robot_type = if args.len() >= 3 {
                     args[2].as_str().to_string()
@@ -123,7 +159,6 @@ fn main() {
                     "potato".to_string()
                 };
             }
-            
 
             let mut stream = stream.unwrap();
             let _ = stream.write(&[2]);
@@ -173,14 +208,14 @@ fn main() {
                 println!("[Connection] Failed to connect to daemon.");
                 exit(1);
             }
-        },
+        }
         "--help" => {
             println!("Usage: daybreak [OPTION]");
             println!("Options:");
             commands.iter().for_each(|(k, v)| {
                 println!("    {}\t{}", k, v);
             });
-        },
+        }
         "--start" => {
             if std::fs::exists(format!("{}/daybreak.sock", temp_dir)).unwrap() {
                 println!("[Daemon] Socket file already exists. Exiting...");
@@ -189,7 +224,7 @@ fn main() {
             println!("Starting Daybreak Daemon...");
             on_shutdown();
             daemonhandler::main_d();
-        },
+        }
         "ls" => {
             let attach = args.contains(&"-a".to_string()) || args.contains(&"--attach".to_string());
             let mut frequency: u64 = 1000;
@@ -212,15 +247,14 @@ fn main() {
                     frequency = freq_from_user.unwrap().clone();
                 }
             }
-            
+
             if attach {
                 let duration = Duration::from_millis(frequency);
                 read_devices_tui::tui();
-            }
-            else {
+            } else {
                 println!("{}", read_devices());
             }
-        },
+        }
         "download" => {
             // connect to daemon
             let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
@@ -238,22 +272,27 @@ fn main() {
                     file_path = if let Some(file_path) = section.get("code_path") {
                         file_path.to_string()
                     } else {
-                        println!("[Download] Missing code_path in section [connection] in daybreak.ini.");
+                        println!(
+                            "[Download] Missing code_path in section [connection] in daybreak.ini."
+                        );
                         exit(1);
                         "".to_string()
                     };
-                    println!("[Download] Using code_path: {} from daybreak.ini!", file_path);
+                    println!(
+                        "[Download] Using code_path: {} from daybreak.ini!",
+                        file_path
+                    );
                 } else {
-                    println!("[Download] Missing code_path in section [connection] in daybreak.ini.");
+                    println!(
+                        "[Download] Missing code_path in section [connection] in daybreak.ini."
+                    );
                     exit(1);
-                } 
-            }
-            else if args.len() < 2 {
+                }
+            } else if args.len() < 2 {
                 println!("[Download] Please pass a file path to put the file into.");
                 println!("Usage: daybreak download [FILE PATH]");
                 exit(1);
-            }
-            else {
+            } else {
                 file_path = args[1].to_string();
             }
             let mut stream = stream.unwrap();
@@ -300,39 +339,39 @@ fn main() {
                         match buffer[0] {
                             100 => {
                                 println!("[Download] File does not exist.");
-                            },
+                            }
                             104 => {
                                 println!("[Download] Failed to read IP address.");
-                            },
+                            }
                             105 => {
                                 println!("[Download] Failed to download file.");
-                            },
+                            }
                             101 => {
                                 println!("[Download] Failed to authenticate with ssh.");
-                            },
+                            }
                             102 => {
                                 println!("[Download] Failed to connect to ssh.");
-                            },
+                            }
                             103 => {
                                 println!("[Download] Failed to read from local file. (Check permissions)");
-                            },
+                            }
                             _ => {
                                 println!("[Download] Unknown response from daemon. {}", buffer[0]);
                             }
                         }
                     }
-                },
+                }
                 100 => {
                     println!("[Download] File does not exist.");
-                },
+                }
                 50 => {
                     println!("[Download] No available robot.");
-                },
+                }
                 _ => {
                     println!("[Download] Unknown response from daemon.");
                 }
             }
-        },
+        }
         "upload" => {
             // connect to daemon
             let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
@@ -348,7 +387,9 @@ fn main() {
                     file_path = if let Some(file_path) = section.get("code_path") {
                         file_path.to_string()
                     } else {
-                        println!("[Upload] Missing code_path in section [connection] in daybreak.ini.");
+                        println!(
+                            "[Upload] Missing code_path in section [connection] in daybreak.ini."
+                        );
                         exit(1);
                         "".to_string()
                     };
@@ -356,14 +397,12 @@ fn main() {
                 } else {
                     println!("[Upload] Missing code_path in section [connection] in daybreak.ini.");
                     exit(1);
-                } 
-            }
-            else if args.len() < 2 {
+                }
+            } else if args.len() < 2 {
                 println!("[Upload] Please pass a file path to upload the file.");
                 println!("Usage: daybreak upload [FILE PATH]");
                 exit(1);
-            }
-            else {
+            } else {
                 file_path = args[1].to_string();
             }
             let mut stream = stream.unwrap();
@@ -382,7 +421,6 @@ fn main() {
                 println!("[Upload] Failed to flush stream.");
                 exit(1);
             }
-            
 
             println!("[Upload] Sent file path to daemon.");
 
@@ -411,36 +449,38 @@ fn main() {
                         match buffer[0] {
                             100 => {
                                 println!("[Upload] File does not exist.");
-                            },
+                            }
                             104 => {
                                 println!("[Upload] Failed to read IP address.");
-                            },
+                            }
                             105 => {
                                 println!("[Upload] Failed to upload file.");
-                            },
+                            }
                             101 => {
                                 println!("[Upload] Failed to authenticate with ssh.");
-                            },
+                            }
                             102 => {
                                 println!("[Upload] Failed to connect to ssh.");
-                            },
+                            }
                             103 => {
-                                println!("[Upload] Failed to read from local file. (Check permissions)");
-                            },
+                                println!(
+                                    "[Upload] Failed to read from local file. (Check permissions)"
+                                );
+                            }
                             _ => {
                                 println!("[Upload] Unknown response from daemon.");
                             }
                         }
                     }
-                },
+                }
                 100 => {
                     println!("[Upload] File does not exist.");
-                },
+                }
                 _ => {
                     println!("[Upload] Unknown response from daemon.");
                 }
             }
-        },
+        }
         "run" => {
             if args.len() < 2 || args.contains(&"--tui".to_string()) {
                 let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
@@ -479,8 +519,30 @@ fn main() {
             }
 
             let stream_clone = Arc::clone(&stream);
+            let terminal_string = Arc::new(Mutex::new(String::new()));
+            let terminal_string_clone = Arc::clone(&terminal_string);
+
+            // Spawn a thread to watch terminal string changes
             thread::spawn(move || {
-                input_executor(stream_clone, true, Arc::new(AtomicBool::new(false)));
+                let mut last_len = 0;
+                loop {
+                    let current = terminal_string_clone.lock().unwrap();
+                    if current.len() > last_len {
+                        print!("{}", &current[last_len..]);
+                        last_len = current.len();
+                    }
+                    drop(current);
+                    thread::sleep(Duration::from_millis(50));
+                }
+            });
+
+            thread::spawn(move || {
+                input_executor(
+                    stream_clone,
+                    true,
+                    Arc::new(AtomicBool::new(false)),
+                    terminal_string,
+                );
             });
             stream.lock().unwrap().set_nonblocking(true).unwrap();
             let mut buffer = vec![];
@@ -503,7 +565,7 @@ fn main() {
                     buffer = file;
                 }
             }
-        },
+        }
         "input" => {
             let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
             if stream.is_err() {
@@ -531,12 +593,34 @@ fn main() {
             println!("[Input] Waiting for response...");
 
             let stream_clone = Arc::clone(&stream);
+            let terminal_string = Arc::new(Mutex::new(String::new()));
+            let terminal_string_clone = Arc::clone(&terminal_string);
+
+            // Spawn a thread to watch terminal string changes
             thread::spawn(move || {
-                input_executor(stream_clone, true, Arc::new(AtomicBool::new(false)));
+                let mut last_len = 0;
+                loop {
+                    let current = terminal_string_clone.lock().unwrap();
+                    if current.len() > last_len {
+                        print!("{}", &current[last_len..]);
+                        last_len = current.len();
+                    }
+                    drop(current);
+                    thread::sleep(Duration::from_millis(50));
+                }
+            });
+
+            thread::spawn(move || {
+                input_executor(
+                    stream_clone,
+                    true,
+                    Arc::new(AtomicBool::new(false)),
+                    terminal_string,
+                );
             });
             stream.lock().unwrap().set_nonblocking(true).unwrap();
             println!("[Input] Started input listener.");
-        },
+        }
         "shutdown" => {
             let stream = UnixStream::connect(format!("{}/daybreak.sock", temp_dir));
             if stream.is_err() {
@@ -564,5 +648,4 @@ fn main() {
             exit(1);
         }
     }
-    
 }
