@@ -3,7 +3,7 @@ pub mod run_robot_tui {
         collections::HashMap,
         fs,
         io::{Read, Write},
-        net::TcpStream,
+        net::{TcpListener, TcpStream},
         os::unix::net::UnixStream,
         process::exit,
         sync::{
@@ -684,6 +684,9 @@ pub mod run_robot_tui {
             }
         });
 
+        // open a socket to listen for external programs to send commands to the robot
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        listener.set_nonblocking(true);
         loop {
             if receiver.load(Ordering::Acquire) {
                 // println!("STOPPED");
@@ -718,36 +721,103 @@ pub mod run_robot_tui {
                 }
                 active_gamepad = Some(id);
             }
-            if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-                let mut bitmap: u64 = 0;
-                // Set bitmap based on current button_map state
-                for (button, is_pressed) in button_map.iter() {
-                    if *is_pressed {
-                        let mapped_index = gamepad_mapped(&button);
-                        bitmap |= 1 << mapped_index;
+            // always look for external connections to send commands to the robot as a gamepad
+            let mut axes = vec![0.0, 0.0, 0.0, 0.0];
+            if let Ok((mut stream, _)) = listener.accept() {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str("Received external connection\n");
+                let mut buffer = [0; 1];
+                let _ = stream.read(&mut buffer);
+                let command = buffer[0];
+                match command {
+                    // 2 means an input write
+                    2 => {
+                        let mut buffer = [0; 1];
+                        let _ = stream.read(&mut buffer);
+                        // match the buffer to a button
+                        let button = standardized_button_indices
+                            .iter()
+                            .find(|(_, &val)| val == buffer[0] as i32)
+                            .map(|(k, _)| k);
+                        if let Some(button) = button {
+                            button_map.insert(button.clone(), true);
+                        }
+                    }
+                    // 3 means a button release
+                    3 => {
+                        let mut buffer = [0; 1];
+                        let _ = stream.read(&mut buffer);
+                        let button = standardized_button_indices
+                            .iter()
+                            .find(|(_, &val)| val == buffer[0] as i32)
+                            .map(|(k, _)| k);
+                        if let Some(button) = button {
+                            button_map.insert(button.clone(), false);
+                        }
+                    }
+                    // 4 means an axes write
+                    4 => {
+                        let mut buffer = [0; 4];
+                        let _ = stream.read(&mut buffer);
+                        axes = vec![
+                            buffer[0] as f32 / 127.0,
+                            buffer[1] as f32 / 127.0,
+                            buffer[2] as f32 / 127.0,
+                            buffer[3] as f32 / 127.0,
+                        ];
+                    }
+                    _ => {
+                        // drop the connection
                     }
                 }
-                let mut stream = stream.lock().unwrap();
-                let _ = stream.write(&[5]);
-                let input = Input {
-                    connected: true,
-                    buttons: bitmap,
-                    axes: vec![
+                let _ = stream.flush();
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str("External connection closed\n");
+            }
+            if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+                if axes[0] == 0.0 && axes[1] == 0.0 && axes[2] == 0.0 && axes[3] == 0.0 {
+                    axes = vec![
                         gamepad.value(Axis::LeftStickX),
                         gamepad.value(Axis::LeftStickY),
                         gamepad.value(Axis::RightStickX),
                         gamepad.value(Axis::RightStickY),
-                    ],
-                    source: EnumOrUnknown::new(Source::GAMEPAD),
-                    special_fields: SpecialFields::default(),
-                };
-                let bytes = input.write_to_bytes().unwrap();
-                let _ = stream.write(&[(bytes.len() & 0x00ff) as u8]);
-                let _ = stream.write(&[((bytes.len() & 0xff00) >> 8) as u8]);
-                let _ = stream.write(&bytes);
-                let _ = stream.flush();
-                std::thread::sleep(Duration::from_millis(50));
+                    ];
+                }
             }
+            let mut bitmap: u64 = 0;
+            // Set bitmap based on current button_map state
+            for (button, is_pressed) in button_map.iter() {
+                if *is_pressed {
+                    let mapped_index = gamepad_mapped(&button);
+                    terminal_string
+                        .lock()
+                        .unwrap()
+                        .push_str(&format!("{:?} is pressed\n", button));
+                    bitmap |= 1 << mapped_index;
+                }
+            }
+
+            let mut stream = stream.lock().unwrap();
+
+            let _ = stream.write(&[5]);
+            let input = Input {
+                connected: true,
+                buttons: bitmap,
+                axes,
+                source: EnumOrUnknown::new(Source::GAMEPAD),
+                special_fields: SpecialFields::default(),
+            };
+            let bytes = input.write_to_bytes().unwrap();
+            let _ = stream.write(&[(bytes.len() & 0x00ff) as u8]);
+            let _ = stream.write(&[((bytes.len() & 0xff00) >> 8) as u8]);
+            let _ = stream.write(&bytes);
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 }

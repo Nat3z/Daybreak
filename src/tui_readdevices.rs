@@ -1,11 +1,24 @@
 pub mod read_devices_tui {
-    use std::{io::{Read, Write}, os::unix::net::UnixStream, process::exit, sync::{Arc, Mutex}, thread};
+    use std::{
+        io::{Read, Write},
+        os::unix::net::UnixStream,
+        process::exit,
+        sync::{Arc, Mutex},
+        thread,
+    };
 
+    use crate::{
+        robot::robotmanager::device::{param::Val, DevData},
+        tui::tui::App,
+    };
     use crossterm::event;
     use protobuf::Message;
-    use ratatui::{layout::{Constraint, Layout}, style::{Style, Stylize}, widgets::{Block, List, ListItem, ListState}};
+    use ratatui::{
+        layout::{Constraint, Layout},
+        style::{Style, Stylize},
+        widgets::{Block, List, ListItem, ListState},
+    };
     use Constraint::Percentage;
-    use crate::{robot::robotmanager::device::{param::Val, DevData}, tui::tui::App};
 
     pub fn tui() {
         // In your main loop:
@@ -14,17 +27,31 @@ pub mod read_devices_tui {
         let mut devices_string = Arc::new(read_devices());
 
         let mut terminal = ratatui::init();
-        thread::spawn(move || {
-            loop {
-                match event::read().unwrap() {
-                    event::Event::Key(event::KeyEvent { code: event::KeyCode::Esc, .. }) | event::Event::Key(event::KeyEvent { code: event::KeyCode::Char('q'), .. }) => {
-                        ratatui::restore();
-                        exit(0);
-                    },
-                    event::Event::Key(event::KeyEvent { code: event::KeyCode::Up, ..}) => app_clone.lock().unwrap().scroll_up(),
-                    event::Event::Key(event::KeyEvent { code: event::KeyCode::Down, ..}) => app_clone.lock().unwrap().scroll_down(devices_string.lines().count()),
-                    _ => ()
+        thread::spawn(move || loop {
+            match event::read().unwrap() {
+                event::Event::Key(event::KeyEvent {
+                    code: event::KeyCode::Esc,
+                    ..
+                })
+                | event::Event::Key(event::KeyEvent {
+                    code: event::KeyCode::Char('q'),
+                    ..
+                }) => {
+                    ratatui::restore();
+                    exit(0);
                 }
+                event::Event::Key(event::KeyEvent {
+                    code: event::KeyCode::Up,
+                    ..
+                }) => app_clone.lock().unwrap().scroll_up(),
+                event::Event::Key(event::KeyEvent {
+                    code: event::KeyCode::Down,
+                    ..
+                }) => app_clone
+                    .lock()
+                    .unwrap()
+                    .scroll_down(devices_string.lines().count()),
+                _ => (),
             }
         });
         loop {
@@ -35,28 +62,32 @@ pub mod read_devices_tui {
                 .map(|line| ListItem::new(line.to_string()))
                 .collect();
 
-            terminal.draw(|frame| {
-                let vertical = Layout::vertical([Percentage(100)]);
-                let [main_area] = vertical.areas(frame.area());
+            terminal
+                .draw(|frame| {
+                    let vertical = Layout::vertical([Percentage(100)]);
+                    let [main_area] = vertical.areas(frame.area());
 
-                let devices_list = List::new(lines)
-                    .block(Block::bordered().title("Devices"))
-                    .highlight_style(Style::default().reversed());
+                    let devices_list = List::new(lines)
+                        .block(Block::bordered().title("Devices"))
+                        .highlight_style(Style::default().reversed());
 
-                frame.render_stateful_widget(
-                    devices_list,
-                    main_area,
-                    &mut ListState::default().with_offset(app.lock().unwrap().scroll)
-                );
-            }).unwrap();
+                    frame.render_stateful_widget(
+                        devices_list,
+                        main_area,
+                        &mut ListState::default().with_offset(app.lock().unwrap().scroll),
+                    );
+                })
+                .unwrap();
 
             // Handle scrolling input
-            
         }
     }
     pub fn read_devices() -> String {
         for _ in 1..10 {
-            let stream = UnixStream::connect(format!("{}/daybreak.sock", std::env::temp_dir().into_os_string().into_string().unwrap()));
+            let stream = UnixStream::connect(format!(
+                "{}/daybreak.sock",
+                std::env::temp_dir().into_os_string().into_string().unwrap()
+            ));
             if stream.is_err() {
                 return "[List Devices] Failed to connect to daemon.".to_string();
             }
@@ -93,31 +124,24 @@ pub mod read_devices_tui {
                 if device.name == "CustomData" {
                     // println!("{} (Stopwatch)", device.uid);
                     built_str.push_str(&format!("{} (Stopwatch)\n", device.uid));
-                }
-                else {
+                } else {
                     // println!("{} ({})", device.uid, device.name);
-                    built_str.push_str(&format!("{} ({})\n", device.uid, device.name));
+                    built_str.push_str(&format!(
+                        "{}_{} ({})\n",
+                        device.type_, device.uid, device.name
+                    ));
                 }
                 for field in device.params {
                     // turn the val into its respective data type
                     let val = field.val.as_ref().unwrap();
                     let val = match val {
-                        Val::Bval(val) => {
-                            val.to_string()
-                        },
-                        Val::Fval(val) => {
-                            val.to_string()
-                        },
-                        Val::Ival(val) => {
-                            val.to_string()
-                        },
-                        _ => {
-                            "Unknown".to_string()
-                        }
+                        Val::Bval(val) => val.to_string(),
+                        Val::Fval(val) => val.to_string(),
+                        Val::Ival(val) => val.to_string(),
+                        _ => "Unknown".to_string(),
                     };
                     built_str.push_str(&format!("{} - {}\n", field.name, val));
                     // println!("{} - {}", field.name, val);
-                    
                 }
                 built_str.push_str("\n\n");
                 // println!("\n");
