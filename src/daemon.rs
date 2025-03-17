@@ -301,8 +301,15 @@ pub mod daemonhandler {
                                 let _ = socket.lock().unwrap().flush();
                                 continue;
                             }
-                            let remote_file = sess
-                                .scp_recv(Path::new("/home/pi/runtime/executor/studentcode.py"));
+                            let mut home_dir = sess.channel_session().unwrap();
+                            home_dir.exec("echo $HOME").unwrap();
+                            let mut home_dir_str = String::new();
+                            home_dir.read_to_string(&mut home_dir_str).unwrap();
+                            home_dir_str = home_dir_str.trim().to_string();
+                            println!("[Daemon @Upload] Remote home directory: {}", home_dir_str);
+                            let path = format!("{}/runtime/executor/studentcode.py", home_dir_str)
+                                .to_string();
+                            let remote_file = sess.scp_recv(Path::new(&path));
 
                             if remote_file.is_err() {
                                 println!("[Daemon @Download] Failed to get file.");
