@@ -1,5 +1,6 @@
 pub mod daemon;
 pub mod robot;
+pub mod sfx_manager;
 pub mod tui;
 pub mod tui_readdevices;
 pub mod tui_runrobot;

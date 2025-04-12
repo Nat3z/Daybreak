@@ -2,20 +2,22 @@ pub mod run_robot_tui {
     use std::{
         collections::HashMap,
         fs,
-        io::{Read, Write},
+        io::{BufReader, Cursor, Read, Seek, Write},
         net::{TcpListener, TcpStream},
         os::unix::net::UnixStream,
+        path::{Path, PathBuf},
         process::exit,
         sync::{
             atomic::{AtomicBool, Ordering},
-            mpsc::{channel, Receiver},
+            mpsc::{self, Sender},
             Arc, Mutex,
         },
         thread,
         time::Duration,
     };
 
-    use crossterm::event;
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent};
     use gilrs::{Axis, Button, Event, GamepadId, Gilrs};
     use protobuf::{EnumOrUnknown, Message, SpecialFields};
     use ratatui::{
@@ -24,15 +26,20 @@ pub mod run_robot_tui {
         text::Line,
         widgets::{Block, List, ListItem, ListState},
     };
+    use rodio::source::Source as RodioSource;
+    use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
     use signal_hook::{consts::SIGINT, iterator::Signals};
     use Constraint::Percentage;
 
     use crate::{
         keymap::gamepad_mapped,
-        robot::robotmanager::input::{Input, Source},
+        keymap::key_map,
+        robot::robotmanager::input::{Input, Source as InputSource},
+        sfx_manager::SfxManager,
         tui::tui::App,
         tui_readdevices::read_devices_tui::read_devices,
     };
+
     pub fn tui(stream: Arc<Mutex<UnixStream>>) {
         println!("Starting TUI...");
         let devices_string: Arc<Mutex<String>> =
@@ -435,7 +442,6 @@ pub mod run_robot_tui {
                 .unwrap();
         }
     }
-
     pub fn input_executor(
         stream: Arc<Mutex<UnixStream>>,
         utilize_stopper: bool,
@@ -443,6 +449,11 @@ pub mod run_robot_tui {
         terminal_string: Arc<Mutex<String>>,
     ) -> () {
         let stream_clone = Arc::clone(&stream);
+
+        // Create a channel for sound effect commands
+        let (sfx_tx, sfx_rx) = mpsc::channel();
+        let sfx_tx_clone = sfx_tx.clone();
+
         if utilize_stopper {
             thread::spawn(move || {
                 for sig in Signals::new([SIGINT]).unwrap().forever() {
@@ -456,21 +467,53 @@ pub mod run_robot_tui {
                     let _ = stream.write(&[4]);
                     let _ = stream.flush();
                     println!("[Run] Sent stop message to daemon.");
+
+                    // Send stop command through channel and wait for it to complete
+                    if let Ok(_) = sfx_tx_clone.send(("stop".to_string(), true, false)) {
+                        // Give time for stop sound to play
+                        thread::sleep(Duration::from_millis(1000));
+                        // Then stop all sounds
+                        let _ = sfx_tx_clone.send(("".to_string(), false, true));
+                    }
                     exit(0);
                 }
             });
         }
 
         let mut gilrs = Gilrs::new().unwrap();
-
-        // Iterate over all connected gamepads
-        // for (_id, gamepad) in gilrs.gamepads() {
-        //     println!("{} is {:?}", gamepad.name(), gamepad.power_info());
-        // }
+        let mut sfx_manager = match SfxManager::new() {
+            Ok(mut manager) => {
+                if let Err(e) = manager.load_sfx() {
+                    terminal_string
+                        .lock()
+                        .unwrap()
+                        .push_str(&format!("Failed to load sound effects: {}\n", e));
+                } else {
+                    terminal_string
+                        .lock()
+                        .unwrap()
+                        .push_str("Loaded sound effects\n");
+                    // Play startup sound
+                    let _ = manager.play_sfx("startup", true);
+                    // Start idle sound after startup
+                    thread::sleep(Duration::from_millis(1000)); // Wait for startup sound
+                    let _ = manager.play_sfx("idle", false);
+                }
+                Some(manager)
+            }
+            Err(e) => {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str(&format!("Failed to initialize sound system: {}\n", e));
+                None
+            }
+        };
 
         let mut active_gamepad: Option<GamepadId> = None;
         let mut button_map: HashMap<Button, bool> = HashMap::new();
         let mut button_mapping: HashMap<Button, Button> = HashMap::new();
+        let mut axes = vec![0.0, 0.0, 0.0, 0.0];
 
         let standardized_button_indices = HashMap::from([
             (Button::South, 0),
@@ -647,6 +690,123 @@ pub mod run_robot_tui {
             }
         }
 
+        // Initialize joystick multipliers with defaults
+        let mut joystick_multipliers = [1.0f32; 4]; // [LeftX, LeftY, RightX, RightY]
+
+        // Try to load existing calibration
+        let config_dir = std::path::PathBuf::from(".").join(".daybreak");
+        let calibration_path = config_dir.join("joystick_calibration.txt");
+
+        let mut should_calibrate = true;
+        if let Ok(calibration_str) = fs::read_to_string(&calibration_path) {
+            terminal_string
+                .lock()
+                .unwrap()
+                .push_str("Found existing joystick calibration, attempting to load...\n");
+
+            let values: Vec<f32> = calibration_str
+                .split(',')
+                .filter_map(|s| s.trim().parse::<f32>().ok())
+                .collect();
+
+            if values.len() == 4 {
+                joystick_multipliers.copy_from_slice(&values);
+                terminal_string.lock().unwrap().push_str(&format!(
+                    "Successfully loaded calibration: Left(X:{}, Y:{}), Right(X:{}, Y:{})\n",
+                    joystick_multipliers[0],
+                    joystick_multipliers[1],
+                    joystick_multipliers[2],
+                    joystick_multipliers[3]
+                ));
+
+                should_calibrate = false;
+            } else {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str("Invalid calibration file format, starting fresh calibration...\n");
+            }
+        }
+
+        if should_calibrate {
+            // Joystick calibration
+            terminal_string
+                .lock()
+                .unwrap()
+                .push_str("\nJoystick Calibration Setup:\n");
+            terminal_string
+                .lock()
+                .unwrap()
+                .push_str("This will calibrate the direction of each joystick axis.\n\n");
+
+            let calibration_steps = [
+                ("Push the LEFT stick FORWARD", (Axis::LeftStickY, 1)),
+                ("Push the LEFT stick RIGHT", (Axis::LeftStickX, 0)),
+                ("Push the RIGHT stick FORWARD", (Axis::RightStickY, 3)),
+                ("Push the RIGHT stick RIGHT", (Axis::RightStickX, 2)),
+            ];
+
+            for (instruction, (axis, index)) in calibration_steps {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str(&format!("{} and hold...\n", instruction));
+
+                let mut max_value = 0.0f32;
+                let start_time = std::time::Instant::now();
+
+                while start_time.elapsed() < Duration::from_secs(2) {
+                    while let Some(Event { id, event, .. }) = gilrs.next_event() {
+                        active_gamepad = Some(id);
+                    }
+
+                    if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+                        let value = gamepad.value(axis);
+                        if value.abs() > max_value.abs() {
+                            max_value = value;
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+
+                // If the max value is negative when we expect positive, flip the multiplier
+                if max_value.abs() > 0.5 {
+                    // Only calibrate if we got a significant input
+                    joystick_multipliers[index] = if max_value > 0.0 { 1.0 } else { -1.0 };
+                    terminal_string.lock().unwrap().push_str(&format!(
+                        "Calibrated! Multiplier set to {}\n",
+                        joystick_multipliers[index]
+                    ));
+                } else {
+                    terminal_string
+                        .lock()
+                        .unwrap()
+                        .push_str("No significant input detected, keeping default multiplier\n");
+                }
+            }
+
+            terminal_string
+                .lock()
+                .unwrap()
+                .push_str("\nJoystick calibration complete!\n");
+
+            // Save calibration to file
+            let calibration_str = joystick_multipliers
+                .iter()
+                .map(|m| m.to_string())
+                .collect::<Vec<String>>()
+                .join(",");
+
+            let config_dir = std::path::PathBuf::from(".").join(".daybreak");
+            if let Err(e) = fs::write(config_dir.join("joystick_calibration.txt"), calibration_str)
+            {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str(&format!("Failed to save joystick calibration: {}\n", e));
+            }
+        }
+
         button_map.insert(Button::DPadDown, false);
         button_map.insert(Button::DPadUp, false);
         button_map.insert(Button::DPadLeft, false);
@@ -686,11 +846,44 @@ pub mod run_robot_tui {
         // open a socket to listen for external programs to send commands to the robot
         let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
         listener.set_nonblocking(true);
+
+        // Previous stick states for sfx
+        let mut prev_stick_states = HashMap::new();
+        prev_stick_states.insert("stick_left_up", false);
+        prev_stick_states.insert("stick_left_down", false);
+        prev_stick_states.insert("stick_left_left", false);
+        prev_stick_states.insert("stick_left_right", false);
+        prev_stick_states.insert("stick_right_up", false);
+        prev_stick_states.insert("stick_right_down", false);
+        prev_stick_states.insert("stick_right_left", false);
+        prev_stick_states.insert("stick_right_right", false);
+
         loop {
+            // Handle any pending sound effect commands
+            while let Ok((name, once, stop_all)) = sfx_rx.try_recv() {
+                if let Some(ref mut sfx) = sfx_manager {
+                    if stop_all {
+                        sfx.stop_all();
+                    } else if !name.is_empty() {
+                        if once {
+                            let _ = sfx.play_sfx(&name, true);
+                        } else {
+                            let _ = sfx.play_sfx(&name, false);
+                        }
+                    }
+                }
+            }
+
             if receiver.load(Ordering::Acquire) {
-                // println!("STOPPED");
+                if let Some(ref mut sfx) = sfx_manager {
+                    // Play stop sound before stopping all sounds
+                    let _ = sfx.play_sfx("stop", true);
+                    thread::sleep(Duration::from_millis(2000));
+                    sfx.stop_all();
+                }
                 break;
             }
+
             while let Some(Event {
                 id, event, time, ..
             }) = gilrs.next_event()
@@ -698,17 +891,37 @@ pub mod run_robot_tui {
                 match event {
                     gilrs::EventType::ButtonPressed(button, _) => {
                         if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-                            // Find which standard button this maps to
                             if let Some((&std_button, _)) =
                                 button_mapping.iter().find(|(_, &v)| v == button)
                             {
                                 button_map.insert(std_button, true);
+
+                                // Send sound command through channel
+                                let sfx_name = match std_button {
+                                    Button::South => "button_south",
+                                    Button::East => "button_east",
+                                    Button::West => "button_west",
+                                    Button::North => "button_north",
+                                    Button::DPadUp => "dpad_up",
+                                    Button::DPadDown => "dpad_down",
+                                    Button::DPadLeft => "dpad_left",
+                                    Button::DPadRight => "dpad_right",
+                                    Button::LeftTrigger => "left_bumper",
+                                    Button::RightTrigger => "right_bumper",
+                                    Button::LeftTrigger2 => "left_trigger",
+                                    Button::RightTrigger2 => "right_trigger",
+                                    Button::Select => "select",
+                                    Button::Start => "start",
+                                    _ => "",
+                                };
+                                if !sfx_name.is_empty() {
+                                    let _ = sfx_tx.send((sfx_name.to_string(), false, false));
+                                }
                             }
                         }
                     }
                     gilrs::EventType::ButtonReleased(button, _) => {
                         if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-                            // Find which standard button this maps to
                             if let Some((&std_button, _)) =
                                 button_mapping.iter().find(|(_, &v)| v == button)
                             {
@@ -720,6 +933,55 @@ pub mod run_robot_tui {
                 }
                 active_gamepad = Some(id);
             }
+
+            // Update axes from gamepad
+            if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+                axes = vec![
+                    gamepad.value(Axis::LeftStickX),
+                    gamepad.value(Axis::LeftStickY),
+                    gamepad.value(Axis::RightStickX),
+                    gamepad.value(Axis::RightStickY),
+                ];
+            }
+
+            // Handle stick movements
+            if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+                let threshold = 0.5;
+                let left_up = axes[1] * joystick_multipliers[1] > threshold;
+                let left_down = axes[1] * joystick_multipliers[1] < -threshold;
+                let left_left = axes[0] * joystick_multipliers[0] < -threshold;
+                let left_right = axes[0] * joystick_multipliers[0] > threshold;
+
+                let right_up = axes[3] * joystick_multipliers[3] > threshold;
+                let right_down = axes[3] * joystick_multipliers[3] < -threshold;
+                let right_left = axes[2] * joystick_multipliers[2] < -threshold;
+                let right_right = axes[2] * joystick_multipliers[2] > threshold;
+
+                // Update stick states and send sound commands
+                let stick_states = vec![
+                    ("stick_left_up", left_up),
+                    ("stick_left_down", left_down),
+                    ("stick_left_left", left_left),
+                    ("stick_left_right", left_right),
+                    ("stick_right_up", right_up),
+                    ("stick_right_down", right_down),
+                    ("stick_right_left", right_left),
+                    ("stick_right_right", right_right),
+                ];
+
+                for (name, current_state) in stick_states {
+                    let prev_state = prev_stick_states.get(name).copied().unwrap_or(false);
+                    if current_state && !prev_state {
+                        // Start playing the sound when stick moves to position
+                        let _ = sfx_tx.send((name.to_string(), false, false));
+                    } else if !current_state && prev_state {
+                        // Stop the sound when stick leaves position
+                        let _ = sfx_tx.send((format!("stop_{}", name), true, false));
+                    }
+                    prev_stick_states.insert(name, current_state);
+                }
+            }
+
             // always look for external connections to send commands to the robot as a gamepad
             let mut axes = vec![0.0, 0.0, 0.0, 0.0];
             if let Ok((mut stream, _)) = listener.accept() {
@@ -778,16 +1040,7 @@ pub mod run_robot_tui {
                     .unwrap()
                     .push_str("External connection closed\n");
             }
-            if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-                if axes[0] == 0.0 && axes[1] == 0.0 && axes[2] == 0.0 && axes[3] == 0.0 {
-                    axes = vec![
-                        gamepad.value(Axis::LeftStickX),
-                        gamepad.value(Axis::LeftStickY),
-                        gamepad.value(Axis::RightStickX),
-                        gamepad.value(Axis::RightStickY),
-                    ];
-                }
-            }
+
             let mut bitmap: u64 = 0;
             // Set bitmap based on current button_map state
             for (button, is_pressed) in button_map.iter() {
@@ -808,7 +1061,7 @@ pub mod run_robot_tui {
                 connected: true,
                 buttons: bitmap,
                 axes,
-                source: EnumOrUnknown::new(Source::GAMEPAD),
+                source: EnumOrUnknown::new(InputSource::GAMEPAD),
                 special_fields: SpecialFields::default(),
             };
             let bytes = input.write_to_bytes().unwrap();

@@ -2,16 +2,18 @@ use crossterm::event;
 use daybreak::{
     daemon::daemonhandler,
     keymap::gamepad_mapped,
+    keymap::key_map,
     robot::robotmanager::{
         device::{param::Val, DevData},
-        input::{Input, Source},
+        input::{Input, Source as InputSource},
     },
+    sfx_manager::SfxManager,
     tui::tui::App,
     tui_readdevices::{
         self,
         read_devices_tui::{self, read_devices},
     },
-    tui_runrobot::{self, run_robot_tui::input_executor},
+    tui_runrobot::run_robot_tui::{self, input_executor, tui},
 };
 use gilrs::{Axis, Button, Event, GamepadId, Gilrs};
 use ini::Ini;
@@ -488,7 +490,7 @@ fn main() {
                     println!("[Run] Failed to connect to daemon.");
                     exit(1);
                 }
-                tui_runrobot::run_robot_tui::tui(Arc::new(Mutex::new(stream.unwrap())));
+                tui(Arc::new(Mutex::new(stream.unwrap())));
                 return;
             }
             let run_mode = args[1].as_str();
