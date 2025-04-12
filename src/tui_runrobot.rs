@@ -676,7 +676,6 @@ pub mod run_robot_tui {
             loop {
                 let current = terminal_string_clone.lock().unwrap();
                 if current.len() > last_len {
-                    print!("{}", &current[last_len..]);
                     last_len = current.len();
                 }
                 drop(current);
