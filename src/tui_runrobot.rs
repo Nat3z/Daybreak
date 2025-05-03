@@ -482,22 +482,25 @@ pub mod run_robot_tui {
 
         let mut gilrs = Gilrs::new().unwrap();
         let mut sfx_manager = match SfxManager::new() {
-            Ok(mut manager) => {
-                if let Err(e) = manager.load_sfx() {
+            Ok(manager) => {
+                terminal_string
+                    .lock()
+                    .unwrap()
+                    .push_str("Initialized sound system\n");
+                // Play startup sound
+                if let Err(e) = manager.play_sfx("startup", true) {
                     terminal_string
                         .lock()
                         .unwrap()
-                        .push_str(&format!("Failed to load sound effects: {}\n", e));
-                } else {
+                        .push_str(&format!("Failed to play startup sound: {}\n", e));
+                }
+                // Start idle sound after startup
+                thread::sleep(Duration::from_millis(1000)); // Wait for startup sound
+                if let Err(e) = manager.play_sfx("idle", false) {
                     terminal_string
                         .lock()
                         .unwrap()
-                        .push_str("Loaded sound effects\n");
-                    // Play startup sound
-                    let _ = manager.play_sfx("startup", true);
-                    // Start idle sound after startup
-                    thread::sleep(Duration::from_millis(1000)); // Wait for startup sound
-                    let _ = manager.play_sfx("idle", false);
+                        .push_str(&format!("Failed to play idle sound: {}\n", e));
                 }
                 Some(manager)
             }
@@ -513,7 +516,10 @@ pub mod run_robot_tui {
         let mut active_gamepad: Option<GamepadId> = None;
         let mut button_map: HashMap<Button, bool> = HashMap::new();
         let mut button_mapping: HashMap<Button, Button> = HashMap::new();
-        let mut axes = vec![0.0, 0.0, 0.0, 0.0];
+        let mut prev_stick_states = HashMap::new();
+
+        // Initialize the axes vector
+        let mut axes = [0.0f32; 4];
 
         let standardized_button_indices = HashMap::from([
             (Button::South, 0),
@@ -847,28 +853,32 @@ pub mod run_robot_tui {
         let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
         listener.set_nonblocking(true);
 
-        // Previous stick states for sfx
-        let mut prev_stick_states = HashMap::new();
-        prev_stick_states.insert("stick_left_up", false);
-        prev_stick_states.insert("stick_left_down", false);
-        prev_stick_states.insert("stick_left_left", false);
-        prev_stick_states.insert("stick_left_right", false);
-        prev_stick_states.insert("stick_right_up", false);
-        prev_stick_states.insert("stick_right_down", false);
-        prev_stick_states.insert("stick_right_left", false);
-        prev_stick_states.insert("stick_right_right", false);
-
         loop {
             // Handle any pending sound effect commands
             while let Ok((name, once, stop_all)) = sfx_rx.try_recv() {
                 if let Some(ref mut sfx) = sfx_manager {
                     if stop_all {
-                        sfx.stop_all();
+                        if let Err(e) = sfx.stop_all() {
+                            terminal_string
+                                .lock()
+                                .unwrap()
+                                .push_str(&format!("Failed to stop all sounds: {}\n", e));
+                        }
                     } else if !name.is_empty() {
                         if once {
-                            let _ = sfx.play_sfx(&name, true);
+                            if let Err(e) = sfx.play_sfx(&name, true) {
+                                terminal_string
+                                    .lock()
+                                    .unwrap()
+                                    .push_str(&format!("Failed to play {}: {}\n", name, e));
+                            }
                         } else {
-                            let _ = sfx.play_sfx(&name, false);
+                            if let Err(e) = sfx.play_sfx(&name, false) {
+                                terminal_string
+                                    .lock()
+                                    .unwrap()
+                                    .push_str(&format!("Failed to play {}: {}\n", name, e));
+                            }
                         }
                     }
                 }
@@ -877,9 +887,19 @@ pub mod run_robot_tui {
             if receiver.load(Ordering::Acquire) {
                 if let Some(ref mut sfx) = sfx_manager {
                     // Play stop sound before stopping all sounds
-                    let _ = sfx.play_sfx("stop", true);
+                    if let Err(e) = sfx.play_sfx("stop", true) {
+                        terminal_string
+                            .lock()
+                            .unwrap()
+                            .push_str(&format!("Failed to play stop sound: {}\n", e));
+                    }
                     thread::sleep(Duration::from_millis(2000));
-                    sfx.stop_all();
+                    if let Err(e) = sfx.stop_all() {
+                        terminal_string
+                            .lock()
+                            .unwrap()
+                            .push_str(&format!("Failed to stop all sounds: {}\n", e));
+                    }
                 }
                 break;
             }
@@ -936,12 +956,10 @@ pub mod run_robot_tui {
 
             // Update axes from gamepad
             if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-                axes = vec![
-                    gamepad.value(Axis::LeftStickX),
-                    gamepad.value(Axis::LeftStickY),
-                    gamepad.value(Axis::RightStickX),
-                    gamepad.value(Axis::RightStickY),
-                ];
+                axes[0] = gamepad.value(Axis::LeftStickX);
+                axes[1] = gamepad.value(Axis::LeftStickY);
+                axes[2] = gamepad.value(Axis::RightStickX);
+                axes[3] = gamepad.value(Axis::RightStickY);
             }
 
             // Handle stick movements
@@ -969,21 +987,33 @@ pub mod run_robot_tui {
                     ("stick_right_right", right_right),
                 ];
 
-                for (name, current_state) in stick_states {
-                    let prev_state = prev_stick_states.get(name).copied().unwrap_or(false);
-                    if current_state && !prev_state {
-                        // Start playing the sound when stick moves to position
-                        let _ = sfx_tx.send((name.to_string(), false, false));
-                    } else if !current_state && prev_state {
-                        // Stop the sound when stick leaves position
-                        let _ = sfx_tx.send((format!("stop_{}", name), true, false));
+                if let Some(ref sfx) = sfx_manager {
+                    for (name, current_state) in stick_states {
+                        let prev_state = prev_stick_states.get(name).copied().unwrap_or(false);
+                        if current_state && !prev_state {
+                            // Start playing the sound when stick moves to position
+                            if let Err(e) = sfx.play_sfx(name, false) {
+                                terminal_string
+                                    .lock()
+                                    .unwrap()
+                                    .push_str(&format!("Failed to play {}: {}\n", name, e));
+                            }
+                        } else if !current_state && prev_state {
+                            // Stop the sound when stick leaves position
+                            if let Err(e) = sfx.stop_sfx(name) {
+                                terminal_string
+                                    .lock()
+                                    .unwrap()
+                                    .push_str(&format!("Failed to stop {}: {}\n", name, e));
+                            }
+                        }
+                        prev_stick_states.insert(name, current_state);
                     }
-                    prev_stick_states.insert(name, current_state);
                 }
             }
 
             // always look for external connections to send commands to the robot as a gamepad
-            let mut axes = vec![0.0, 0.0, 0.0, 0.0];
+            let mut external_axes = vec![0.0, 0.0, 0.0, 0.0];
             if let Ok((mut stream, _)) = listener.accept() {
                 terminal_string
                     .lock()
@@ -1022,12 +1052,10 @@ pub mod run_robot_tui {
                     4 => {
                         let mut buffer = [0; 4];
                         let _ = stream.read(&mut buffer);
-                        axes = vec![
-                            buffer[0] as f32 / 127.0,
-                            buffer[1] as f32 / 127.0,
-                            buffer[2] as f32 / 127.0,
-                            buffer[3] as f32 / 127.0,
-                        ];
+                        axes[0] = buffer[0] as f32 / 127.0;
+                        axes[1] = buffer[1] as f32 / 127.0;
+                        axes[2] = buffer[2] as f32 / 127.0;
+                        axes[3] = buffer[3] as f32 / 127.0;
                     }
                     _ => {
                         // drop the connection
@@ -1060,7 +1088,7 @@ pub mod run_robot_tui {
             let input = Input {
                 connected: true,
                 buttons: bitmap,
-                axes,
+                axes: axes.to_vec(), // Convert array to Vec here
                 source: EnumOrUnknown::new(InputSource::GAMEPAD),
                 special_fields: SpecialFields::default(),
             };
@@ -1069,7 +1097,6 @@ pub mod run_robot_tui {
             let _ = stream.write(&[((bytes.len() & 0xff00) >> 8) as u8]);
             let _ = stream.write(&bytes);
             let _ = stream.flush();
-            std::thread::sleep(Duration::from_millis(50));
         }
     }
 }
