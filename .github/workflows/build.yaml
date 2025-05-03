@@ -60,7 +60,7 @@ jobs:
 
       - name: Install Dependencies (MacOS)
         if: matrix.os == 'macos-latest'
-        run: brew install protobuf openssl@3 alsa-lib
+        run: brew install protobuf openssl@3
 
       - name: Build Cargo Project
         uses: actions-rs/cargo@v1
