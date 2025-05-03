@@ -5,7 +5,6 @@ on:
     branches:
       - main
 
-
 jobs:
   release:
     permissions:
@@ -15,25 +14,24 @@ jobs:
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1.0.0
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: temp-tag
-        release_name: ${{ github.event.head_commit.message }}
-        draft: true
-        prerelease: false
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: temp-tag
+          release_name: ${{ github.event.head_commit.message }}
+          draft: true
+          prerelease: false
 
-
-    - name: Output Release URL File
-      run: echo "${{ steps.create_release.outputs.upload_url }}" > release_url.txt
-    - name: Save Release URL File for publish
-      uses: actions/upload-artifact@v4
-      with:
-        name: release_url
-        path: release_url.txt
+      - name: Output Release URL File
+        run: echo "${{ steps.create_release.outputs.upload_url }}" > release_url.txt
+      - name: Save Release URL File for publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: release_url
+          path: release_url.txt
 
   build:
     permissions:
@@ -54,7 +52,7 @@ jobs:
           toolchain: stable
       - name: Install Dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: sudo apt install -y protobuf-compiler libssl-dev libudev-dev
+        run: sudo apt install -y protobuf-compiler libssl-dev libudev-dev libasound2-dev
 
       - name: Install Brew (MacOS)
         if: matrix.os == 'macos-latest'
@@ -62,7 +60,7 @@ jobs:
 
       - name: Install Dependencies (MacOS)
         if: matrix.os == 'macos-latest'
-        run: brew install protobuf openssl@3
+        run: brew install protobuf openssl@3 alsa-lib
 
       - name: Build Cargo Project
         uses: actions-rs/cargo@v1
@@ -91,4 +89,3 @@ jobs:
           asset_path: target/release/daybreak
           asset_name: daybreak-macos
           asset_content_type: application/octet-stream
-
