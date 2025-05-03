@@ -850,8 +850,6 @@ pub mod run_robot_tui {
         });
 
         // open a socket to listen for external programs to send commands to the robot
-        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
-        listener.set_nonblocking(true);
 
         loop {
             // Handle any pending sound effect commands
@@ -1014,60 +1012,6 @@ pub mod run_robot_tui {
 
             // always look for external connections to send commands to the robot as a gamepad
             let mut external_axes = vec![0.0, 0.0, 0.0, 0.0];
-            if let Ok((mut stream, _)) = listener.accept() {
-                terminal_string
-                    .lock()
-                    .unwrap()
-                    .push_str("Received external connection\n");
-                let mut buffer = [0; 1];
-                let _ = stream.read(&mut buffer);
-                let command = buffer[0];
-                match command {
-                    // 2 means an input write
-                    2 => {
-                        let mut buffer = [0; 1];
-                        let _ = stream.read(&mut buffer);
-                        // match the buffer to a button
-                        let button = standardized_button_indices
-                            .iter()
-                            .find(|(_, &val)| val == buffer[0] as i32)
-                            .map(|(k, _)| k);
-                        if let Some(button) = button {
-                            button_map.insert(button.clone(), true);
-                        }
-                    }
-                    // 3 means a button release
-                    3 => {
-                        let mut buffer = [0; 1];
-                        let _ = stream.read(&mut buffer);
-                        let button = standardized_button_indices
-                            .iter()
-                            .find(|(_, &val)| val == buffer[0] as i32)
-                            .map(|(k, _)| k);
-                        if let Some(button) = button {
-                            button_map.insert(button.clone(), false);
-                        }
-                    }
-                    // 4 means an axes write
-                    4 => {
-                        let mut buffer = [0; 4];
-                        let _ = stream.read(&mut buffer);
-                        axes[0] = buffer[0] as f32 / 127.0;
-                        axes[1] = buffer[1] as f32 / 127.0;
-                        axes[2] = buffer[2] as f32 / 127.0;
-                        axes[3] = buffer[3] as f32 / 127.0;
-                    }
-                    _ => {
-                        // drop the connection
-                    }
-                }
-                let _ = stream.flush();
-                let _ = stream.shutdown(std::net::Shutdown::Both);
-                terminal_string
-                    .lock()
-                    .unwrap()
-                    .push_str("External connection closed\n");
-            }
 
             let mut bitmap: u64 = 0;
             // Set bitmap based on current button_map state
